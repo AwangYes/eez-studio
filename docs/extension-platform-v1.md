@@ -433,3 +433,28 @@ compares that pin with the verified signing key before executable extension code
 can load. In-place V1 replacement always requires the same publisher
 fingerprint; changing publishers, including replacing a signed package with an
 unsigned Developer Mode package, requires an explicit uninstall first.
+
+## Delivery boundaries and next iterations
+
+The V1 Studio foundation intentionally stops at a stable, capability-gated
+JavaScript boundary. The following items are planned follow-up increments and
+are not exposed as usable V1 services yet:
+
+1. Wire `storage.secure` to the main-process `ExtensionSecureStorage` primitive
+   through authenticated IPC, including migration, key rotation, and publisher
+   fingerprint binding tests.
+2. Add separately reviewed `input.inject`, `asset.import`, and
+   `screenshot.capture` services with explicit user prompts, rate limits,
+   payload quotas, and audit events.
+3. Replace logical staging markers with a durable journal whose rename and
+   directory-flush steps are fault-injection tested on Windows and POSIX.
+4. Expand schema metadata for dynamic/conditionally required properties and
+   structured values, then add compatibility fixtures for imported project
+   classes.
+5. Make legacy loader uninstall/reload hooks idempotent and add single-flight
+   lifecycle tests for extensions that fail during cleanup.
+6. Add host observability (structured activation, permission, build, and
+   integrity events) and release metrics without exposing renderer internals.
+
+The JavaScript AI Agent/MCP adapter must be implemented on top of these stable
+services in a separate change set after the Studio foundation PR is reviewed.
