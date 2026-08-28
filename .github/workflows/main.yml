@@ -1,9 +1,35 @@
 name: Build/release
 
-on: push
+on: [push, pull_request]
 
 jobs:
+    extension-platform:
+        name: Extension Platform V1 (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-2022]
+
+        steps:
+            - name: Check out Git repository
+              uses: actions/checkout@v4
+
+            - name: Install Node.js and NPM
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci --ignore-scripts
+
+            - name: Typecheck and test Extension Platform V1
+              run: npm run test:extension-platform
+
     release:
+        if: github.event_name == 'push'
         runs-on: ${{ matrix.os }}
 
         # Platforms to build on/for

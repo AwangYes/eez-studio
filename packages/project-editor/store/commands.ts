@@ -139,6 +139,7 @@ export let insertObject = action(
 class UpdateCommand implements ICommand {
     private oldValues: any = {};
     private newValues: any = {};
+    previousRevision?: symbol;
 
     constructor(
         public object: IEezObject,
@@ -154,6 +155,7 @@ class UpdateCommand implements ICommand {
         if (lastCommand) {
             values = Object.assign(lastCommand.newValues, values);
             this.oldValues = lastCommand.oldValues;
+            this.previousRevision = lastCommand.previousRevision;
         }
 
         for (let propertyName in values) {

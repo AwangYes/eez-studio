@@ -1,4 +1,5 @@
 import "./fix-path";
+import "main/extensions-v1/protocol";
 
 import {
     app,
@@ -34,7 +35,6 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 // app.allowRendererProcessReuse = false;
 
 let homeWindow: BrowserWindow;
-
 app.on("ready", async function () {
     let buildProjectFilePath;
     const buildProjectArgIndex = process.argv.indexOf("--build-project");

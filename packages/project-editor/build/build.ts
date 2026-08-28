@@ -38,6 +38,18 @@ import { buildScpi } from "project-editor/build/scpi";
 import { generateSourceCodeForEezFramework } from "project-editor/lvgl/build";
 import { cleanupSourceFile } from "project-editor/build/cleanup-c-source-files";
 import { generateSourceCodeForEezGuiLite } from "project-editor/eez-gui-lite/build";
+import {
+    assertTaskNotCancelled,
+    SerializedTaskQueue
+} from "project-editor/build/serialized-task-queue";
+import {
+    commitGuardedStagedBuildSync,
+    createBuildStagingFolder,
+    removeBuildStagingFolder,
+    resolveBuildOutputPath,
+    UnsafeBuildPathError,
+    validateBuildManifestFiles
+} from "project-editor/build/build-output";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -50,8 +62,12 @@ let currentBuildFiles: Set<string> = new Set();
 let trackingDestinationFolder: string | null = null;
 
 function trackBuildFile(absolutePath: string, destinationFolderPath: string) {
+    const containedPath = resolveBuildOutputPath(
+        destinationFolderPath,
+        path.relative(destinationFolderPath, absolutePath)
+    );
     // Convert absolute path to relative path from destination folder
-    let relativePath = path.relative(destinationFolderPath, absolutePath);
+    let relativePath = path.relative(destinationFolderPath, containedPath);
     // Normalize path separators to forward slashes for consistency
     relativePath = relativePath.replace(/\\/g, "/");
     currentBuildFiles.add(relativePath);
@@ -104,6 +120,12 @@ export async function writeTextFile(
     filePath: string,
     content: string
 ): Promise<void> {
+    if (trackingDestinationFolder) {
+        resolveBuildOutputPath(
+            trackingDestinationFolder,
+            path.relative(trackingDestinationFolder, filePath)
+        );
+    }
     // Clean up .c and .h files to remove consecutive empty lines
     const basename = path.basename(filePath).toLowerCase();
     if (
@@ -139,6 +161,12 @@ export async function writeBinaryData(
     filePath: string,
     data: Buffer
 ): Promise<void> {
+    if (trackingDestinationFolder) {
+        resolveBuildOutputPath(
+            trackingDestinationFolder,
+            path.relative(trackingDestinationFolder, filePath)
+        );
+    }
     await originalWriteBinaryData(filePath, data);
     if (trackingDestinationFolder) {
         trackBuildFile(filePath, trackingDestinationFolder);
@@ -152,12 +180,24 @@ const trackedWriteBinaryData = writeBinaryData;
 async function loadPreviousManifest(
     destinationFolderPath: string
 ): Promise<BuildManifest | null> {
-    const manifestPath = path.join(destinationFolderPath, ".eez-project-build");
+    const manifestPath = resolveBuildOutputPath(
+        destinationFolderPath,
+        ".eez-project-build"
+    );
 
     try {
         const content = await fs.promises.readFile(manifestPath, "utf-8");
-        return JSON.parse(content) as BuildManifest;
+        const manifest = JSON.parse(content) as BuildManifest;
+        return {
+            files: validateBuildManifestFiles(
+                destinationFolderPath,
+                manifest?.files
+            )
+        };
     } catch (err) {
+        if (err instanceof UnsafeBuildPathError) {
+            throw err;
+        }
         return null;
     }
 }
@@ -166,7 +206,10 @@ async function saveManifest(
     destinationFolderPath: string,
     files: string[]
 ): Promise<void> {
-    const manifestPath = path.join(destinationFolderPath, ".eez-project-build");
+    const manifestPath = resolveBuildOutputPath(
+        destinationFolderPath,
+        ".eez-project-build"
+    );
 
     const manifest: BuildManifest = {
         files: files.sort() // Sort for consistency
@@ -189,7 +232,10 @@ async function deleteOrphanedFiles(
     const orphanedFiles = previousFiles.filter(file => !currentSet.has(file));
 
     for (const relativePath of orphanedFiles) {
-        const absolutePath = path.join(destinationFolderPath, relativePath);
+        const absolutePath = resolveBuildOutputPath(
+            destinationFolderPath,
+            relativePath
+        );
         try {
             await fs.promises.unlink(absolutePath);
             outputSectionsStore.write(
@@ -377,18 +423,22 @@ async function generateFiles(
                 ? projectStore.selectedBuildConfiguration.name
                 : "default",
             undefined,
-            destinationFolderPath +
-                "/" +
+            resolveBuildOutputPath(
+                destinationFolderPath,
                 path.basename(projectStore.filePath || "", ".eez-project") +
-                (project.projectTypeTraits.isApplet ? ".app" : ".res")
+                    (project.projectTypeTraits.isApplet ? ".app" : ".res")
+            )
         );
 
         if (project.projectTypeTraits.isResource && project.micropython) {
             await trackedWriteTextFile(
-                destinationFolderPath +
-                    "/" +
-                    path.basename(projectStore.filePath || "", ".eez-project") +
-                    ".py",
+                resolveBuildOutputPath(
+                    destinationFolderPath,
+                    path.basename(
+                        projectStore.filePath || "",
+                        ".eez-project"
+                    ) + ".py"
+                ),
                 project.micropython.code
             );
         }
@@ -404,12 +454,13 @@ async function generateFiles(
                             configurationBuildResults,
                             configuration.name,
                             buildFile.template,
-                            destinationFolderPath +
-                                "/" +
+                            resolveBuildOutputPath(
+                                destinationFolderPath,
                                 buildFile.fileName.replace(
                                     "<configuration>",
                                     configuration.name
                                 )
+                            )
                         );
                     } catch (err) {
                         await new Promise(resolve => setTimeout(resolve, 10));
@@ -419,12 +470,13 @@ async function generateFiles(
                             configurationBuildResults,
                             configuration.name,
                             buildFile.template,
-                            destinationFolderPath +
-                                "/" +
+                            resolveBuildOutputPath(
+                                destinationFolderPath,
                                 buildFile.fileName.replace(
                                     "<configuration>",
                                     configuration.name
                                 )
+                            )
                         );
                     }
                 }
@@ -436,7 +488,10 @@ async function generateFiles(
                         ? projectStore.selectedBuildConfiguration.name
                         : "default",
                     buildFile.template,
-                    destinationFolderPath + "/" + buildFile.fileName
+                    resolveBuildOutputPath(
+                        destinationFolderPath,
+                        buildFile.fileName
+                    )
                 );
             }
         }
@@ -455,14 +510,62 @@ function anythingToBuild(projectStore: ProjectStore) {
     );
 }
 
-export async function build(
+const buildQueue = new SerializedTaskQueue();
+
+export interface BuildExecutionOptions {
+    readonly signal?: AbortSignal;
+    readonly expectedRevision?: string;
+    readonly onStartRevision?: (revision: string) => void;
+}
+
+export function build(
     projectStore: ProjectStore,
-    option: "check" | "buildAssets" | "buildFiles"
+    option: "check" | "buildAssets" | "buildFiles",
+    executionOptions: BuildExecutionOptions = {}
+) {
+    return buildQueue.run(async () => {
+        const guardRevision =
+            executionOptions.expectedRevision != undefined ||
+            executionOptions.onStartRevision != undefined;
+        let buildRevision: string | undefined;
+        if (guardRevision) {
+            projectStore.assertRevision(executionOptions.expectedRevision);
+            buildRevision = projectStore.publicRevision;
+            executionOptions.onStartRevision?.(buildRevision);
+        }
+
+        const assertCanCommit = () => {
+            assertTaskNotCancelled(executionOptions.signal);
+            if (buildRevision != undefined) {
+                projectStore.assertRevision(buildRevision);
+            }
+        };
+
+        return buildInternal(projectStore, option, {
+            signal: executionOptions.signal,
+            guardedOutput:
+                guardRevision || executionOptions.signal != undefined,
+            assertCanCommit
+        });
+    }, executionOptions.signal, false);
+}
+
+interface BuildInternalOptions {
+    signal?: AbortSignal;
+    guardedOutput: boolean;
+    assertCanCommit(): void;
+}
+
+async function buildInternal(
+    projectStore: ProjectStore,
+    option: "check" | "buildAssets" | "buildFiles",
+    executionOptions: BuildInternalOptions
 ) {
     const timeStart = new Date().getTime();
 
     const OutputSections = projectStore.outputSectionsStore;
 
+    executionOptions.assertCanCommit();
     OutputSections.clear(Section.OUTPUT);
 
     if (!anythingToBuild(projectStore)) {
@@ -471,6 +574,7 @@ export async function build(
             MessageType.INFO,
             `Nothing to build!`
         );
+        executionOptions.assertCanCommit();
         return undefined;
     }
 
@@ -478,6 +582,7 @@ export async function build(
 
     // give some time for loader to start
     await new Promise(resolve => setTimeout(resolve, 50));
+    assertTaskNotCancelled(executionOptions.signal);
 
     let parts: any = undefined;
 
@@ -486,19 +591,30 @@ export async function build(
     // Reset build file tracking
     currentBuildFiles = new Set();
     let previousManifest: BuildManifest | null = null;
+    let stagingFolderPath: string | undefined;
 
     try {
         let sectionNames: string[] | undefined = undefined;
 
         let destinationFolderPath;
+        let outputFolderPath;
         if (option == "buildFiles") {
             destinationFolderPath = projectStore.getAbsoluteFilePath(
                 project.settings.build.destinationFolder || "."
             );
 
-            if (!fs.existsSync(destinationFolderPath)) {
-                await makeFolder(destinationFolderPath);
+            if (executionOptions.guardedOutput) {
+                stagingFolderPath = await createBuildStagingFolder(
+                    destinationFolderPath
+                );
+                outputFolderPath = stagingFolderPath;
+            } else {
+                if (!fs.existsSync(destinationFolderPath)) {
+                    await makeFolder(destinationFolderPath);
+                }
+                outputFolderPath = destinationFolderPath;
             }
+            assertTaskNotCancelled(executionOptions.signal);
 
             // Load previous manifest for file cleanup
             if (!project.projectTypeTraits.isDashboard) {
@@ -508,7 +624,7 @@ export async function build(
                 sectionNames = getSectionNames(projectStore);
 
                 // Enable build file tracking before any files are written
-                enableBuildTracking(destinationFolderPath);
+                enableBuildTracking(outputFolderPath);
                 
                 // Set source cleanup options based on project type
                 setSourceCleanupOptions({
@@ -543,6 +659,7 @@ export async function build(
                             configuration,
                             option
                         );
+                        assertTaskNotCancelled(executionOptions.signal);
                 } finally {
                     OutputSections.closeGroup(Section.OUTPUT, false);
                 }
@@ -564,6 +681,7 @@ export async function build(
                             selectedBuildConfiguration,
                             option
                         );
+                    assertTaskNotCancelled(executionOptions.signal);
                 } finally {
                     OutputSections.closeGroup(Section.OUTPUT, false);
                 }
@@ -574,12 +692,14 @@ export async function build(
                     undefined,
                     option
                 );
+                assertTaskNotCancelled(executionOptions.signal);
             }
         }
 
         showCheckResult(projectStore);
 
         if (option == "check") {
+            executionOptions.assertCanCommit();
             return undefined;
         }
 
@@ -610,36 +730,36 @@ export async function build(
                 `Build successfully finished at ${new Date().toLocaleString()}`
             );
 
+            executionOptions.assertCanCommit();
             return parts;
         }
 
         if (!project.projectTypeTraits.isDashboard) {
             parts = await generateFiles(
                 projectStore,
-                destinationFolderPath || "",
+                outputFolderPath || "",
                 configurationBuildResults
             );
+            assertTaskNotCancelled(executionOptions.signal);
 
             if (project.projectTypeTraits.isLVGL) {
                 await generateSourceCodeForEezFramework(
                     project,
-                    destinationFolderPath || "",
+                    outputFolderPath || "",
                     configurationBuildResults["Default"]?.[0]?.[
                         "EEZ_FLOW_IS_USING_CRYPTO_SHA256"
                     ] as any as boolean
                 );
+                assertTaskNotCancelled(executionOptions.signal);
             }
 
             if (project.projectTypeTraits.isEezGuiLite) {
                 await generateSourceCodeForEezGuiLite(
                     project,
-                    destinationFolderPath || ""
+                    outputFolderPath || ""
                 );
+                assertTaskNotCancelled(executionOptions.signal);
             }
-
-
-            // Disable tracking after file generation
-            disableBuildTracking();
         } else {
             const baseName = path.basename(
                 projectStore.filePath || "",
@@ -647,7 +767,10 @@ export async function build(
             );
 
             const destinationFilePath =
-                destinationFolderPath + "/" + baseName + ".eez-dashboard";
+                resolveBuildOutputPath(
+                    outputFolderPath || "",
+                    baseName + ".eez-dashboard"
+                );
 
             const archiver = await import("archiver");
 
@@ -682,10 +805,10 @@ export async function build(
 
             {
                 const destinationFilePath =
-                    destinationFolderPath +
-                    "/" +
-                    baseName +
-                    ".eez-project-build";
+                    resolveBuildOutputPath(
+                        outputFolderPath || "",
+                        baseName + ".eez-project-build"
+                    );
 
                 const defaultConfiguration =
                     project.settings.build.configurations[0];
@@ -723,6 +846,8 @@ export async function build(
             `Build successfully finished at ${new Date().toLocaleString()}`
         );
 
+        assertTaskNotCancelled(executionOptions.signal);
+
         // Save build manifest and delete orphaned files
         if (
             option == "buildFiles" &&
@@ -730,19 +855,55 @@ export async function build(
             !project.projectTypeTraits.isDashboard
         ) {
             const currentFiles = Array.from(currentBuildFiles);
+            const orphanedFiles = previousManifest
+                ? previousManifest.files.filter(
+                      file => !currentFiles.includes(file)
+                  )
+                : [];
 
-            if (previousManifest && previousManifest.files.length > 0) {
+            if (!executionOptions.guardedOutput && orphanedFiles.length > 0) {
                 await deleteOrphanedFiles(
                     destinationFolderPath,
-                    previousManifest.files,
+                    previousManifest?.files ?? [],
                     currentFiles,
                     OutputSections
                 );
             }
 
-            await saveManifest(destinationFolderPath, currentFiles);
+            await saveManifest(outputFolderPath || destinationFolderPath, currentFiles);
+
+            if (executionOptions.guardedOutput) {
+                commitGuardedStagedBuildSync(
+                    stagingFolderPath!,
+                    destinationFolderPath,
+                    orphanedFiles,
+                    executionOptions.assertCanCommit
+                );
+                for (const relativePath of orphanedFiles) {
+                    OutputSections.write(
+                        Section.OUTPUT,
+                        MessageType.INFO,
+                        `Deleted orphaned file: ${relativePath}`
+                    );
+                }
+            }
+        } else if (option == "buildFiles" && executionOptions.guardedOutput) {
+            commitGuardedStagedBuildSync(
+                stagingFolderPath!,
+                destinationFolderPath!,
+                [],
+                executionOptions.assertCanCommit
+            );
+        } else {
+            executionOptions.assertCanCommit();
         }
     } catch (err) {
+        if (
+            (err as any)?.code == "CANCELLED" ||
+            (err as any)?.code == "PROJECT_REVISION_CONFLICT"
+        ) {
+            throw err;
+        }
         console.error(err);
         if (err instanceof BuildException) {
             OutputSections.write(
@@ -761,7 +922,9 @@ export async function build(
 
         showCheckResult(projectStore);
     } finally {
+        disableBuildTracking();
         OutputSections.setLoading(Section.OUTPUT, false);
+        await removeBuildStagingFolder(stagingFolderPath);
     }
 
     return parts;

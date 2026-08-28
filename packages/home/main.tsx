@@ -6,7 +6,10 @@ import { createRoot } from "react-dom/client";
 import { configure } from "mobx";
 import { observer } from "mobx-react";
 
-import { loadExtensions } from "eez-studio-shared/extensions/extensions";
+import {
+    extensions,
+    loadExtensions
+} from "eez-studio-shared/extensions/extensions";
 import { getNodeModuleFolders } from "eez-studio-shared/extensions/yarn";
 
 import * as notification from "eez-studio-ui/notification";
@@ -26,8 +29,15 @@ import "home/settings";
 import { extensionsCatalog } from "./extensions-manager/catalog";
 import { buildProject } from "home/build-project";
 import { layoutModels } from "eez-studio-ui/side-dock";
-
+import {
+    registerProjectExtensionServices,
+    startProjectExtensionEvents
+} from "home/extensions-v1/project-service";
+import { studioExtensionServiceHost } from "home/extensions-v1/service-host";
+import { startDeclarativeExtensionContributionHost } from "home/extensions-v1/contribution-host";
 configure({ enforceActions: "observed", useProxies: "always" });
+
+const extensionPlatformDisposables: Array<{ dispose(): void }> = [];
 
 // make sure we store all the values waiting to be stored inside blur event handler
 function blurAll() {
@@ -37,7 +47,7 @@ function blurAll() {
     document.body.removeChild(tmp);
 }
 
-async function beforeAppClose() {
+async function beforeAppClose(shutdownExtensionManager: boolean) {
     blurAll();
 
     for (const tab of tabs.tabs) {
@@ -48,10 +58,18 @@ async function beforeAppClose() {
         }
     }
 
+    if (shutdownExtensionManager) {
+        await ipcRenderer.invoke("eez-extension-v1/shutdown");
+    }
+
     const {
         destroyExtensions
     } = require("eez-studio-shared/extensions/extensions");
-    destroyExtensions();
+    studioExtensionServiceHost.dispose();
+    for (const disposable of extensionPlatformDisposables.splice(0)) {
+        disposable.dispose();
+    }
+    await destroyExtensions();
 
     layoutModels.saveToLocalStorage();
 
@@ -59,13 +77,13 @@ async function beforeAppClose() {
 }
 
 ipcRenderer.on("beforeClose", async () => {
-    if (await beforeAppClose()) {
+    if (await beforeAppClose(true)) {
         ipcRenderer.send("readyToClose");
     }
 });
 
 ipcRenderer.on("reload", async () => {
-    if (await beforeAppClose()) {
+    if (await beforeAppClose(false)) {
         ipcRenderer.send("reload");
     }
 });
@@ -170,11 +188,29 @@ async function main() {
     }
 
     await loadExtensions(nodeModuleFolders);
+    extensionPlatformDisposables.push(
+        startDeclarativeExtensionContributionHost({
+            onUnregisterHomeSections(sectionIds) {
+                for (const sectionId of sectionIds) {
+                    tabs.findTab(`homeSection_${sectionId}`)?.close?.();
+                }
+            }
+        })
+    );
 
     extensionsCatalog.load();
 
     if (!buildProject) {
         loadTabs();
+
+        registerProjectExtensionServices();
+        extensionPlatformDisposables.push(startProjectExtensionEvents());
+        studioExtensionServiceHost.markReady(
+            Array.from(extensions.values())
+                .filter(extension => extension.extensionType == "extension-v1")
+                .map(extension => extension.id)
+                .sort()
+        );
 
         const root = createRoot(document.getElementById("EezStudio_Content")!);
         root.render(
@@ -190,7 +226,9 @@ async function main() {
     ipcRenderer.send("open-command-line-project");
 }
 
-main();
+void main().catch(error => {
+    console.error("Failed to initialize the Studio home window", error);
+});
 
 // setTimeout(() => {
 //     require("eez-studio-shared/module-stat");

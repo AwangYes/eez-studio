@@ -2,6 +2,671 @@ import type { Stream } from "stream";
 
 ////////////////////////////////////////////////////////////////////////////////
 
+/** Public contract version implemented by Extension Platform V1. */
+export const EXTENSION_API_VERSION: "1.0";
+export const API_VERSION: typeof EXTENSION_API_VERSION;
+
+export type ExtensionApiVersion = typeof EXTENSION_API_VERSION;
+export type ExtensionHostKind = "sandbox";
+export type ExtensionMode = "production" | "development" | "test";
+export type ExtensionDeactivationReason =
+    | "reload"
+    | "uninstall"
+    | "shutdown"
+    | "replace"
+    | "activation-error";
+
+export interface Disposable {
+    dispose(): void | Promise<void>;
+}
+
+export type Event<T> = (
+    listener: (event: T) => void | Promise<void>,
+    thisArg?: unknown,
+    disposables?: Disposable[]
+) => Disposable;
+
+export type ExtensionCapability =
+    | "project.read"
+    | "project.write"
+    | "project.manage"
+    | "build.execute"
+    | "runtime.control"
+    | "input.inject"
+    | "asset.import"
+    | "screenshot.capture"
+    | "storage.secure";
+
+export type ExtensionJsonValue =
+    | null
+    | boolean
+    | number
+    | string
+    | readonly ExtensionJsonValue[]
+    | { readonly [key: string]: ExtensionJsonValue };
+
+export interface ExtensionCommandContribution {
+    readonly id: string;
+    readonly title: string;
+}
+
+export interface ExtensionHomeSectionContribution {
+    readonly id: string;
+    readonly title: string;
+    readonly icon: string;
+    readonly category?: "none" | "common" | "instrument";
+    readonly commands?: readonly ExtensionCommandContribution[];
+}
+
+export interface ExtensionContributions {
+    readonly homeSections?: readonly ExtensionHomeSectionContribution[];
+}
+
+/** The normalized contents of the `eez-studio` package manifest property. */
+export interface ExtensionManifest {
+    apiVersion: ExtensionApiVersion;
+    host: ExtensionHostKind;
+    browser: string;
+    activationEvents?: readonly string[];
+    capabilities?: readonly ExtensionCapability[];
+    allowedOrigins?: readonly string[];
+    contributes?: ExtensionContributions;
+}
+
+export interface ExtensionLogger {
+    trace(message: string, ...args: unknown[]): void;
+    debug(message: string, ...args: unknown[]): void;
+    info(message: string, ...args: unknown[]): void;
+    warn(message: string, ...args: unknown[]): void;
+    error(message: string, ...args: unknown[]): void;
+}
+
+export interface ExtensionStorage {
+    get<T>(key: string, defaultValue?: T): Promise<T | undefined>;
+    update(key: string, value: unknown): Promise<void>;
+    delete(key: string): Promise<void>;
+    keys(): Promise<readonly string[]>;
+}
+
+export interface ExtensionSecrets {
+    get(key: string): Promise<string | undefined>;
+    store(key: string, value: string): Promise<void>;
+    delete(key: string): Promise<void>;
+}
+
+export interface ExtensionServiceDescriptor {
+    service: string;
+    method: string;
+}
+
+export interface ExtensionServiceRequest<TParams = unknown>
+    extends ExtensionServiceDescriptor {
+    requestId?: string;
+    params?: TParams;
+}
+
+export interface ExtensionServiceError {
+    code: string;
+    message: string;
+    data?: ExtensionJsonValue;
+}
+
+export interface ExtensionServiceResponse<TResult = unknown> {
+    requestId?: string;
+    ok: boolean;
+    result?: TResult;
+    error?: ExtensionServiceError;
+}
+
+export type ExtensionServiceHandler<TParams = unknown, TResult = unknown> = (
+    request: ExtensionServiceRequest<TParams>,
+    signal: AbortSignal
+) => TResult | Promise<TResult>;
+
+export interface ExtensionServiceRegistry {
+    register<TParams = unknown, TResult = unknown>(
+        descriptor: ExtensionServiceDescriptor,
+        handler: ExtensionServiceHandler<TParams, TResult>
+    ): Disposable;
+
+    request<TParams = unknown, TResult = unknown>(
+        request: ExtensionServiceRequest<TParams>,
+        signal?: AbortSignal
+    ): Promise<ExtensionServiceResponse<TResult>>;
+}
+
+export interface ExtensionContext {
+    readonly id: string;
+    readonly version: string;
+    readonly apiVersion: ExtensionApiVersion;
+    readonly mode: ExtensionMode;
+    readonly log: ExtensionLogger;
+    readonly storage: ExtensionStorage;
+    readonly secrets: ExtensionSecrets;
+    readonly signal: AbortSignal;
+    readonly subscriptions: Disposable[];
+    readonly services: ExtensionServiceRegistry;
+}
+
+export interface ExtensionModule {
+    activate(
+        context: ExtensionContext
+    ): void | Disposable | Promise<void | Disposable>;
+    deactivate?(
+        reason: ExtensionDeactivationReason
+    ): void | Promise<void>;
+}
+
+/** Opaque identifiers and concurrency tokens used by Studio services. */
+export type StudioProjectId = string;
+export type StudioObjectId = string;
+export type StudioRevision = string;
+export type StudioContentHash = string;
+export type StudioUri = string;
+
+export type StudioServiceName =
+    | "workspace"
+    | "project"
+    | "build"
+    | "runtime"
+    | "editor";
+
+/** Stable error codes that may be reported by the sandbox service host. */
+export type StudioServiceErrorCode =
+    | "SERVICE_NOT_FOUND"
+    | "METHOD_NOT_FOUND"
+    | "INVALID_ARGUMENT"
+    | "CAPABILITY_NOT_DECLARED"
+    | "CAPABILITY_NOT_GRANTED"
+    | "GRANT_EXPIRED"
+    | "PERMISSION_DENIED"
+    | "PERMISSION_REVOKED"
+    | "PROJECT_NOT_FOUND"
+    | "PROJECT_NOT_READY"
+    | "DIRTY_PROJECT"
+    | "CANCELLED"
+    | "DEADLINE_EXCEEDED"
+    | "REQUEST_TOO_LARGE"
+    | "RESPONSE_TOO_LARGE"
+    | "TOO_MANY_REQUESTS"
+    | "OBJECT_NOT_FOUND"
+    | "INVALID_PROPERTY"
+    | "INVALID_PROPERTY_VALUE"
+    | "INVALID_PARENT"
+    | "INVALID_CHILD_TYPE"
+    | "INVALID_MOVE"
+    | "UNKNOWN_OBJECT_TYPE"
+    | "TRANSACTIONS_UNAVAILABLE"
+    | "PROJECT_REVISION_CONFLICT"
+    | "PROJECT_TRANSACTION_ROLLBACK_FAILED"
+    | "PROJECT_DISK_HASH_CONFLICT"
+    | "INVALID_RUNTIME_STATE"
+    | "STUDIO_SERVICE_ERROR"
+    | "SERVICE_ERROR"
+    | "INTERNAL";
+
+export interface StudioServiceCallError extends Error {
+    readonly code: StudioServiceErrorCode;
+}
+
+export type StudioEmptyParams = Readonly<Record<string, never>>;
+
+export interface StudioProjectHandle {
+    readonly projectId: StudioProjectId;
+    readonly uri?: StudioUri;
+    readonly title: string;
+    readonly ready: boolean;
+    readonly dirty: boolean;
+    readonly active: boolean;
+    readonly revision: StudioRevision;
+    readonly diskHash?: StudioContentHash;
+}
+
+export type StudioWorkspaceListParams = StudioEmptyParams;
+export type StudioWorkspaceListResult = readonly StudioProjectHandle[];
+
+export interface StudioWorkspaceActivateParams {
+    readonly projectId: StudioProjectId;
+}
+
+export interface StudioWorkspaceOpenParams {
+    readonly uri: StudioUri;
+}
+
+export interface StudioWorkspaceReloadParams {
+    readonly projectId: StudioProjectId;
+    readonly discardChanges?: boolean;
+}
+
+export interface StudioWorkspaceCloseParams {
+    readonly projectId: StudioProjectId;
+}
+
+export interface StudioWorkspaceCloseResult {
+    readonly closed: boolean;
+}
+
+export interface StudioProjectParams {
+    readonly projectId: StudioProjectId;
+}
+
+export type StudioProjectDescribeParams = StudioProjectParams;
+
+export interface StudioProjectSnapshotParams extends StudioProjectParams {
+    /** Zero-based UTF-16 code-unit cursor. `offset` is a compatibility alias. */
+    readonly cursor?: number;
+    readonly offset?: number;
+    readonly limit?: number;
+}
+
+export interface StudioProjectSnapshotResult {
+    readonly projectId: StudioProjectId;
+    readonly revision: StudioRevision;
+    readonly cursor: number;
+    readonly cursorUnit: "utf16-code-unit";
+    readonly totalCharacters: number;
+    readonly totalBytes: number;
+    readonly content: string;
+    readonly nextCursor?: number;
+    readonly hash: StudioContentHash;
+}
+
+export interface StudioProjectGetObjectParams extends StudioProjectParams {
+    readonly objectId: StudioObjectId;
+}
+
+export interface StudioProjectObject {
+    readonly projectId: StudioProjectId;
+    readonly revision: StudioRevision;
+    readonly objectId: StudioObjectId;
+    readonly type: string;
+    readonly value: ExtensionJsonValue;
+}
+
+export interface StudioSchemaProperty {
+    readonly name: string;
+    readonly type: string;
+    readonly required: boolean;
+    /** True when requiredness depends on the concrete object instance. */
+    readonly conditionallyRequired?: true;
+    readonly readOnly: boolean;
+}
+
+export interface StudioSchemaObjectType {
+    readonly type: string;
+    readonly properties: readonly StudioSchemaProperty[];
+}
+
+export type StudioProjectGetSchemaParams = StudioProjectParams;
+export type StudioProjectGetSchemaResult = readonly StudioSchemaObjectType[];
+
+export interface StudioProjectCreateEdit {
+    readonly kind: "create";
+    readonly temporaryId?: string;
+    readonly parentId: StudioObjectId;
+    readonly property: string;
+    readonly type: string;
+    readonly properties: Readonly<Record<string, ExtensionJsonValue>>;
+}
+
+export interface StudioProjectUpdateEdit {
+    readonly kind: "update";
+    readonly objectId: StudioObjectId;
+    readonly properties: Readonly<Record<string, ExtensionJsonValue>>;
+}
+
+export interface StudioProjectDeleteEdit {
+    readonly kind: "delete";
+    readonly objectId: StudioObjectId;
+}
+
+export interface StudioProjectMoveEdit {
+    readonly kind: "move";
+    readonly objectId: StudioObjectId;
+    readonly parentId: StudioObjectId;
+    readonly property: string;
+    readonly index?: number;
+}
+
+export type StudioProjectEdit =
+    | StudioProjectCreateEdit
+    | StudioProjectUpdateEdit
+    | StudioProjectDeleteEdit
+    | StudioProjectMoveEdit;
+
+export interface StudioProjectApplyEditsParams extends StudioProjectParams {
+    readonly label?: string;
+    readonly expectedRevision?: StudioRevision;
+    readonly edits: readonly StudioProjectEdit[];
+}
+
+export interface StudioProjectApplyEditsResult {
+    readonly projectId: StudioProjectId;
+    readonly revision: StudioRevision;
+    readonly temporaryIds: Readonly<Record<string, StudioObjectId>>;
+    readonly dirty: boolean;
+}
+
+export interface StudioProjectSaveParams extends StudioProjectParams {
+    readonly expectedRevision?: StudioRevision;
+    readonly expectedDiskHash?: StudioContentHash;
+}
+
+export interface StudioProjectUndoParams extends StudioProjectParams {
+    readonly expectedRevision?: StudioRevision;
+}
+
+export type StudioProjectRedoParams = StudioProjectUndoParams;
+
+export interface StudioBuildParams extends StudioProjectParams {
+    readonly expectedRevision?: StudioRevision;
+}
+
+export interface StudioBuildResult {
+    readonly projectId: StudioProjectId;
+    readonly revision: StudioRevision;
+    readonly ok: boolean;
+    readonly result: ExtensionJsonValue;
+}
+
+export type StudioRuntimeState =
+    | "stopped"
+    | "starting"
+    | "running"
+    | "paused";
+
+export interface StudioRuntimeStatus {
+    readonly state: StudioRuntimeState;
+    readonly debugger: boolean;
+    readonly error?: string;
+}
+
+export type StudioRuntimeStatusParams = StudioProjectParams;
+
+export interface StudioRuntimeStartParams extends StudioProjectParams {
+    readonly debugger?: boolean;
+}
+
+export type StudioRuntimeStopParams = StudioProjectParams;
+export type StudioRuntimePauseParams = StudioProjectParams;
+export type StudioRuntimeResumeParams = StudioProjectParams;
+
+export interface StudioRuntimeStepParams extends StudioProjectParams {
+    readonly mode?: "step-into" | "step-over" | "step-out";
+}
+
+export interface StudioEditorObjectParams extends StudioProjectParams {
+    readonly objectId: StudioObjectId;
+}
+
+export type StudioEditorNavigateParams = StudioEditorObjectParams;
+export type StudioEditorSelectParams = StudioEditorObjectParams;
+
+export interface StudioEditorNavigateResult {
+    readonly navigated: true;
+    readonly objectId: StudioObjectId;
+}
+
+export interface StudioEditorSelectResult {
+    readonly selected: true;
+    readonly objectId: StudioObjectId;
+}
+
+export interface StudioServiceMethod<TParams, TResult> {
+    readonly params: TParams;
+    readonly result: TResult;
+}
+
+/** Compile-time map for every public Studio service operation in API 1.0. */
+export interface StudioServiceContract {
+    readonly workspace: {
+        readonly list: StudioServiceMethod<
+            StudioWorkspaceListParams,
+            StudioWorkspaceListResult
+        >;
+        readonly activate: StudioServiceMethod<
+            StudioWorkspaceActivateParams,
+            StudioProjectHandle
+        >;
+        readonly open: StudioServiceMethod<
+            StudioWorkspaceOpenParams,
+            StudioProjectHandle
+        >;
+        readonly reload: StudioServiceMethod<
+            StudioWorkspaceReloadParams,
+            StudioProjectHandle
+        >;
+        readonly close: StudioServiceMethod<
+            StudioWorkspaceCloseParams,
+            StudioWorkspaceCloseResult
+        >;
+    };
+    readonly project: {
+        readonly describe: StudioServiceMethod<
+            StudioProjectDescribeParams,
+            StudioProjectHandle
+        >;
+        readonly snapshot: StudioServiceMethod<
+            StudioProjectSnapshotParams,
+            StudioProjectSnapshotResult
+        >;
+        readonly getObject: StudioServiceMethod<
+            StudioProjectGetObjectParams,
+            StudioProjectObject
+        >;
+        readonly getSchema: StudioServiceMethod<
+            StudioProjectGetSchemaParams,
+            StudioProjectGetSchemaResult
+        >;
+        readonly applyEdits: StudioServiceMethod<
+            StudioProjectApplyEditsParams,
+            StudioProjectApplyEditsResult
+        >;
+        readonly save: StudioServiceMethod<
+            StudioProjectSaveParams,
+            StudioProjectHandle
+        >;
+        readonly undo: StudioServiceMethod<
+            StudioProjectUndoParams,
+            StudioProjectHandle
+        >;
+        readonly redo: StudioServiceMethod<
+            StudioProjectRedoParams,
+            StudioProjectHandle
+        >;
+    };
+    readonly build: {
+        readonly check: StudioServiceMethod<
+            StudioBuildParams,
+            StudioBuildResult
+        >;
+        readonly run: StudioServiceMethod<StudioBuildParams, StudioBuildResult>;
+    };
+    readonly runtime: {
+        readonly status: StudioServiceMethod<
+            StudioRuntimeStatusParams,
+            StudioRuntimeStatus
+        >;
+        readonly start: StudioServiceMethod<
+            StudioRuntimeStartParams,
+            StudioRuntimeStatus
+        >;
+        readonly stop: StudioServiceMethod<
+            StudioRuntimeStopParams,
+            StudioRuntimeStatus
+        >;
+        readonly pause: StudioServiceMethod<
+            StudioRuntimePauseParams,
+            StudioRuntimeStatus
+        >;
+        readonly resume: StudioServiceMethod<
+            StudioRuntimeResumeParams,
+            StudioRuntimeStatus
+        >;
+        readonly step: StudioServiceMethod<
+            StudioRuntimeStepParams,
+            StudioRuntimeStatus
+        >;
+    };
+    readonly editor: {
+        readonly navigate: StudioServiceMethod<
+            StudioEditorNavigateParams,
+            StudioEditorNavigateResult
+        >;
+        readonly select: StudioServiceMethod<
+            StudioEditorSelectParams,
+            StudioEditorSelectResult
+        >;
+    };
+}
+
+export type StudioServiceMethodName<
+    TService extends StudioServiceName
+> = Extract<keyof StudioServiceContract[TService], string>;
+
+export type StudioServiceOperation = {
+    [TService in StudioServiceName]: `${TService}:${StudioServiceMethodName<TService>}`;
+}[StudioServiceName];
+
+type StudioServiceDefinitionByMethod<
+    TService extends StudioServiceName,
+    TMethod extends StudioServiceMethodName<TService>
+> = StudioServiceContract[TService][TMethod];
+
+export type StudioServiceParams<
+    TOperation extends StudioServiceOperation
+> = TOperation extends `${infer TService extends StudioServiceName}:${infer TMethod}`
+    ? TMethod extends StudioServiceMethodName<TService>
+        ? StudioServiceDefinitionByMethod<
+              TService,
+              TMethod
+          > extends StudioServiceMethod<infer TParams, unknown>
+            ? TParams
+            : never
+        : never
+    : never;
+
+export type StudioServiceResult<
+    TOperation extends StudioServiceOperation
+> = TOperation extends `${infer TService extends StudioServiceName}:${infer TMethod}`
+    ? TMethod extends StudioServiceMethodName<TService>
+        ? StudioServiceDefinitionByMethod<
+              TService,
+              TMethod
+          > extends StudioServiceMethod<unknown, infer TResult>
+            ? TResult
+            : never
+        : never
+    : never;
+
+type StudioServiceParamsByMethod<
+    TService extends StudioServiceName,
+    TMethod extends StudioServiceMethodName<TService>
+> = StudioServiceDefinitionByMethod<
+    TService,
+    TMethod
+> extends StudioServiceMethod<
+    infer TParams,
+    unknown
+>
+    ? TParams
+    : never;
+
+type StudioServiceResultByMethod<
+    TService extends StudioServiceName,
+    TMethod extends StudioServiceMethodName<TService>
+> = StudioServiceDefinitionByMethod<
+    TService,
+    TMethod
+> extends StudioServiceMethod<
+    unknown,
+    infer TResult
+>
+    ? TResult
+    : never;
+
+export type StudioExtensionEvent =
+    | {
+          readonly type: "command";
+          readonly commandId: string;
+      }
+    | {
+          readonly type: "workspace.changed";
+          readonly projects: readonly StudioProjectHandle[];
+      }
+    | {
+          readonly type: "workspace.activeProjectChanged";
+          readonly projectId?: StudioProjectId;
+      }
+    | {
+          readonly type: "project.changed";
+          readonly projectId: StudioProjectId;
+          readonly revision: StudioRevision;
+          readonly dirty: boolean;
+      }
+    | {
+          readonly type: "project.saved";
+          readonly projectId: StudioProjectId;
+          readonly revision: StudioRevision;
+          readonly diskHash: StudioContentHash;
+      }
+    | {
+          readonly type: "build.completed";
+          readonly projectId: StudioProjectId;
+          readonly revision: StudioRevision;
+          readonly ok: boolean;
+      }
+    | {
+          readonly type: "runtime.changed";
+          readonly projectId: StudioProjectId;
+          readonly status: StudioRuntimeStatus;
+      }
+    | {
+          readonly type: "editor.selectionChanged";
+          readonly projectId: StudioProjectId;
+          readonly objectIds: readonly StudioObjectId[];
+      };
+
+/** API exposed to an extension's sandboxed browser entry point. */
+export interface SandboxExtensionHostApi {
+    readonly instanceId: string;
+
+    request<
+        TService extends StudioServiceName,
+        TMethod extends StudioServiceMethodName<TService>
+    >(
+        service: TService,
+        method: TMethod,
+        args: StudioServiceParamsByMethod<TService, TMethod>
+    ): Promise<StudioServiceResultByMethod<TService, TMethod>>;
+
+    notify<
+        TService extends StudioServiceName,
+        TMethod extends StudioServiceMethodName<TService>
+    >(
+        service: TService,
+        method: TMethod,
+        args: StudioServiceParamsByMethod<TService, TMethod>
+    ): void;
+
+    /** Returns an idempotent unsubscribe function. */
+    subscribe(listener: (event: StudioExtensionEvent) => void): () => void;
+}
+
+/** Module shape expected from a sandbox manifest's `browser` entry point. */
+export interface SandboxExtensionModule {
+    activate(host: SandboxExtensionHostApi): void | Promise<void>;
+    deactivate?(reason: ExtensionDeactivationReason): void | Promise<void>;
+}
+
+declare global {
+    interface Window {
+        readonly eezExtensionHost: SandboxExtensionHostApi;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 export type BasicType =
     | "integer"
     | "float"

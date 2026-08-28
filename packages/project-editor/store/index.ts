@@ -1,7 +1,6 @@
 import { ipcRenderer } from "electron";
 import { dialog, getCurrentWindow } from "@electron/remote";
 import path from "path";
-import fs from "fs";
 import mobx, { toJS } from "mobx";
 import {
     makeObservable,
@@ -15,6 +14,7 @@ import type * as MousetrapModule from "mousetrap";
 import update, { Spec } from "immutability-helper";
 
 import { confirmSave } from "eez-studio-shared/util-renderer";
+import { guid } from "eez-studio-shared/guid";
 
 import * as notification from "eez-studio-ui/notification";
 
@@ -101,11 +101,22 @@ import {
     pasteWithDependencies
 } from "project-editor/store/paste-with-dependencies";
 import {
+    getScrapbookItemEezProject,
     getScrapbookItemTabTitle,
     isScrapbookItemFilePath,
     setScrapbookItemEezProject
 } from "./scrapbook";
 import { confirm } from "eez-studio-ui/dialog-electron";
+import {
+    assertExpectedDiskHash,
+    atomicWriteFile,
+    getFileHash,
+    hashContent,
+    ProjectSaveQueue,
+    runPostCommitAuxiliarySave,
+    withProjectSaveTarget,
+    type AtomicWriteOptions
+} from "project-editor/store/atomic-write";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -118,6 +129,7 @@ export * from "project-editor/store/output-sections";
 export * from "project-editor/store/commands";
 export * from "project-editor/store/serialization";
 export * from "project-editor/store/clipboard";
+export * from "project-editor/store/atomic-write";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -133,6 +145,24 @@ interface ExtensionContent {
         name: string;
         type: IObjectVariableType;
     }[];
+}
+
+export interface ProjectSaveOptions extends AtomicWriteOptions {
+    expectedRevision?: string;
+}
+
+export class ProjectRevisionConflictError extends Error {
+    readonly code = "PROJECT_REVISION_CONFLICT";
+
+    constructor(
+        public expectedRevision: string,
+        public actualRevision: string
+    ) {
+        super(
+            `Project revision changed: expected ${expectedRevision}, got ${actualRevision}`
+        );
+        this.name = "ProjectRevisionConflictError";
+    }
 }
 
 type ProjectStoreContext =
@@ -172,6 +202,12 @@ export class ProjectStore {
     lastRevisionStable: symbol;
 
     lastSuccessfulBuildRevision: symbol | undefined;
+
+    private readonly publicRevisionEpoch = guid();
+    private publicRevisionSequence = 0;
+    publicRevision = `${this.publicRevisionEpoch}:${this.publicRevisionSequence}`;
+    diskHash: string | undefined;
+    private readonly saveQueue = new ProjectSaveQueue();
 
     filePath: string | undefined;
     backgroundCheckEnabled = true;
@@ -254,8 +290,12 @@ export class ProjectStore {
             lastRevision: observable,
             lastRevisionStable: observable,
             lastSuccessfulBuildRevision: observable,
+            publicRevision: observable,
+            diskHash: observable,
             isModified: computed,
             setModified: action,
+            advanceRevision: action,
+            restoreModifiedRevision: action,
             updateLastRevisionStable: action,
             setProject: action,
             setEditorMode: action,
@@ -681,21 +721,82 @@ export class ProjectStore {
         return configuration;
     }
 
-    async doSave() {
+    assertRevision(expectedRevision?: string) {
+        if (
+            expectedRevision != undefined &&
+            expectedRevision != this.publicRevision
+        ) {
+            throw new ProjectRevisionConflictError(
+                expectedRevision,
+                this.publicRevision
+            );
+        }
+    }
+
+    runTransaction<T>(
+        label: string,
+        expectedRevision: string | undefined,
+        fn: () => T
+    ) {
+        if (!this.undoManager) {
+            throw new Error(
+                "Transactions are not available in this project context"
+            );
+        }
+        return this.undoManager.runTransaction(label, () => {
+            this.assertRevision(expectedRevision);
+            return fn();
+        });
+    }
+
+    async doSave(options: ProjectSaveOptions = {}) {
+        this.assertRevision(options.expectedRevision);
+        const revisionBeingSaved = this.lastRevision;
+
         if (!this.project._isDashboardBuild) {
-            await save(this, this.filePath!);
+            const diskHash = await save(this, this.filePath!, {
+                expectedDiskHash:
+                    options.expectedDiskHash ?? this.diskHash
+            });
+
+            runInAction(() => {
+                this.diskHash = diskHash;
+            });
 
             if (this.fontsCacheStore) {
-                await this.fontsCacheStore.save();
+                // The project rename has already committed. Cache failure must
+                // not make Save As restore the previous project path.
+                await runPostCommitAuxiliarySave(
+                    () => this.fontsCacheStore.save(),
+                    error =>
+                        console.warn(
+                            "Failed to save the project fonts cache",
+                            error
+                        )
+                );
             }
         }
 
         runInAction(() => {
-            this.savedRevision = this.lastRevision;
+            this.savedRevision = revisionBeingSaved;
         });
     }
 
-    async saveToFile(saveAs: boolean) {
+    saveToFile(
+        saveAs: boolean,
+        options: ProjectSaveOptions = {}
+    ) {
+        return this.saveQueue.enqueue(() =>
+            this.saveToFileUnlocked(saveAs, options)
+        );
+    }
+
+    private async saveToFileUnlocked(
+        saveAs: boolean,
+        options: ProjectSaveOptions
+    ) {
+        this.assertRevision(options.expectedRevision);
+
         if (this.project) {
             if (!this.filePath || saveAs) {
                 const result = await dialog.showSaveDialog(getCurrentWindow(), {
@@ -713,16 +814,28 @@ export class ProjectStore {
                     if (!filePath.toLowerCase().endsWith(".eez-project")) {
                         filePath += ".eez-project";
                     }
-                    runInAction(() => {
-                        this.filePath = filePath;
-                    });
-                    await this.doSave();
+                    await withProjectSaveTarget(
+                        {
+                            filePath: this.filePath,
+                            diskHash: this.diskHash
+                        },
+                        filePath,
+                        state =>
+                            runInAction(() => {
+                                this.filePath = state.filePath;
+                                this.diskHash = state.diskHash;
+                            }),
+                        () =>
+                            this.doSave({
+                                expectedRevision: options.expectedRevision
+                            })
+                    );
                     return true;
                 } else {
                     return false;
                 }
             } else {
-                await this.doSave();
+                await this.doSave(options);
                 return true;
             }
         }
@@ -762,11 +875,21 @@ export class ProjectStore {
     async openFile(filePath: string) {
         this.filePath = filePath;
 
+        // Hash before parsing. If the file changes while it is being loaded,
+        // the next CAS save fails conservatively instead of overwriting it.
+        const diskHash = isScrapbookItemFilePath(filePath)
+            ? hashContent(getScrapbookItemEezProject(filePath))
+            : await getFileHash(filePath);
+
         const project = await this.openProjectsManager.openMainProject(
             filePath
         );
 
         await this.setProject(project, filePath);
+
+        runInAction(() => {
+            this.diskHash = diskHash;
+        });
 
         this.openProjectsManager.mount();
     }
@@ -792,8 +915,8 @@ export class ProjectStore {
         return true;
     }
 
-    save() {
-        return this.saveToFile(false);
+    save(options: ProjectSaveOptions = {}) {
+        return this.saveToFile(false, options);
     }
 
     saveAs() {
@@ -955,6 +1078,19 @@ export class ProjectStore {
         return previousRevision;
     }
 
+    advanceRevision() {
+        this.publicRevisionSequence++;
+        this.publicRevision = `${this.publicRevisionEpoch}:${this.publicRevisionSequence}`;
+    }
+
+    restoreModifiedRevision(
+        lastRevision: symbol,
+        lastRevisionStable: symbol
+    ) {
+        this.lastRevision = lastRevision;
+        this.lastRevisionStable = lastRevisionStable;
+    }
+
     updateLastRevisionStable() {
         this.lastRevisionStable = this.lastRevision;
     }
@@ -962,6 +1098,7 @@ export class ProjectStore {
     async setProject(project: Project, projectFilePath: string | undefined) {
         this.project = project;
         this.filePath = projectFilePath;
+        this.diskHash = undefined;
 
         project._store = this;
 
@@ -970,6 +1107,8 @@ export class ProjectStore {
         if (this.undoManager) {
             this.undoManager.clear();
         }
+
+        this.advanceRevision();
 
         if (this.uiStateStore) {
             await this.uiStateStore.load();
@@ -1513,6 +1652,7 @@ export class ProjectStore {
     }
 
     reloadProject() {
+        this.advanceRevision();
         ProjectEditor.homeTabs?.reloadProject(this);
     }
 
@@ -1665,36 +1805,34 @@ export function getJSON(projectStore: ProjectStore, tabWidth: number = 2) {
         }
     };
 
+    const previousStore = (projectStore.project as any)._store;
     (projectStore.project as any)._store = undefined;
-
-    const json = objectToJson(projectStore.project, tabWidth, toJsHook);
-
-    projectStore.project._store = projectStore;
-
-    return json;
+    try {
+        return objectToJson(projectStore.project, tabWidth, toJsHook);
+    } finally {
+        projectStore.project._store = previousStore;
+    }
 }
 
-export function save(projectStore: ProjectStore, filePath: string) {
+export async function save(
+    projectStore: ProjectStore,
+    filePath: string,
+    options: AtomicWriteOptions = {}
+) {
     const json = getJSON(projectStore);
 
     if (isScrapbookItemFilePath(filePath)) {
-        return new Promise<void>((resolve, reject) => {
-            try {
-                setScrapbookItemEezProject(filePath, json);
-                resolve();
-            } catch (err) {
-                reject(err);
-            }
-        });
+        const actualDiskHash = hashContent(
+            getScrapbookItemEezProject(filePath)
+        );
+        assertExpectedDiskHash(
+            filePath,
+            options.expectedDiskHash,
+            actualDiskHash
+        );
+        setScrapbookItemEezProject(filePath, json);
+        return hashContent(json);
     }
 
-    return new Promise<void>((resolve, reject) => {
-        fs.writeFile(filePath, json, "utf8", (err: any) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve();
-            }
-        });
-    });
+    return atomicWriteFile(filePath, json, options);
 }

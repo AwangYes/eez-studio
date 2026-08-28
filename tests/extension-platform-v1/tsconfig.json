@@ -1,0 +1,54 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "rootDir": "../../packages",
+        "outDir": "../../build",
+        "paths": {
+            "*": ["../../packages/*"],
+            "eez-studio-shared/extensions-v1": [
+                "./manager-dependency-types.d.ts"
+            ],
+            "eez-studio-shared/extensions/extension": [
+                "./manager-dependency-types.d.ts"
+            ],
+            "eez-studio-shared/extensions/extension-folder": [
+                "./manager-dependency-types.d.ts"
+            ],
+            "eez-studio-shared/extensions/extension-installation": [
+                "./manager-dependency-types.d.ts"
+            ],
+            "eez-studio-shared/extensions/extensions": [
+                "./manager-dependency-types.d.ts"
+            ],
+            "main/home-window": [
+                "./home-window-types.d.ts"
+            ],
+            "project-editor/store": [
+                "./project-store-types.d.ts"
+            ]
+        },
+        "typeRoots": ["../../node_modules/@types"],
+        "types": ["node"]
+    },
+    "include": [
+        "../../packages/eez-studio-shared/extensions-v1/**/*.ts",
+        "../../packages/eez-studio-shared/extensions/extension-context.ts",
+        "../../packages/eez-studio-shared/extensions/extension-installation.ts",
+        "../../packages/eez-studio-shared/extensions/extension-lifecycle.ts",
+        "../../packages/eez-studio-shared/extensions/extension-operation-queue.ts",
+        "../../packages/eez-studio-shared/util-electron.ts",
+        "../../packages/home/extensions-v1/project-service-utils.ts",
+        "../../packages/home/extensions-v1/service-host.ts",
+        "../../packages/main/extensions-v1/permission-manager.ts",
+        "../../packages/main/extensions-v1/manager.ts",
+        "../../packages/main/extensions-v1/renderer-service-broker.ts",
+        "../../packages/main/extensions-v1/sandbox-host.ts",
+        "../../packages/main/extensions-v1/sandbox-preload.ts",
+        "../../packages/project-editor/build/serialized-task-queue.ts",
+        "../../packages/project-editor/build/build-output.ts",
+        "../../packages/project-editor/store/atomic-write.ts",
+        "../../packages/project-editor/store/undo-manager.ts",
+        "./*.d.ts"
+    ]
+}

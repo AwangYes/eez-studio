@@ -8,8 +8,44 @@ import type { IShortcut } from "shortcuts/interfaces";
 import type { IFieldProperties } from "eez-studio-ui/generic-dialog";
 export type { IFieldProperties } from "eez-studio-ui/generic-dialog";
 
-import type { IEezFlowEditor } from "eez-studio-types";
+import type {
+    Disposable,
+    ExtensionApiVersion,
+    ExtensionContext,
+    ExtensionDeactivationReason,
+    ExtensionManifest,
+    IEezFlowEditor
+} from "eez-studio-types";
 import type { IHomeTab } from "home/tabs-store";
+
+export type {
+    Disposable,
+    Event,
+    ExtensionApiVersion,
+    ExtensionCapability,
+    ExtensionCommandContribution,
+    ExtensionContext,
+    ExtensionContributions,
+    ExtensionDeactivationReason,
+    ExtensionHostKind,
+    ExtensionHomeSectionContribution,
+    ExtensionJsonValue,
+    ExtensionLogger,
+    ExtensionManifest,
+    ExtensionMode,
+    ExtensionModule,
+    ExtensionSecrets,
+    ExtensionServiceDescriptor,
+    ExtensionServiceError,
+    ExtensionServiceHandler,
+    ExtensionServiceRegistry,
+    ExtensionServiceRequest,
+    ExtensionServiceResponse,
+    ExtensionStorage
+} from "eez-studio-types";
+
+export const EXTENSION_API_VERSION = "1.0" as const;
+export const API_VERSION = EXTENSION_API_VERSION;
 
 export interface IEditor {
     onCreate(): void;
@@ -148,6 +184,12 @@ export interface IExtensionDescription {
     revisionComments?: string;
     commandsProtocol: CommandsProtocolType;
     commandLineEnding: CommandLineEnding;
+    apiVersion?: ExtensionApiVersion;
+    manifest?: ExtensionManifest;
+    /** Verified publisher identity for a signed V1 package. */
+    publisherKeyId?: string;
+    /** SHA-256 fingerprint of the verified publisher public key. */
+    publisherFingerprint?: string;
 }
 
 export interface IExtensionHost {
@@ -158,14 +200,22 @@ export type ExtensionType =
     | "built-in"
     | "iext"
     | "pext"
+    | "extension-v1"
     | "measurement-functions";
 
 export interface IExtensionDefinition {
     preInstalled: boolean;
     extensionType: ExtensionType;
 
-    init?: () => void;
-    destroy?: () => void;
+    init?: () => void | Promise<void>;
+    destroy?: () => void | Promise<void>;
+
+    activate?: (
+        context: ExtensionContext
+    ) => void | Disposable | Promise<void | Disposable>;
+    deactivate?: (
+        reason: ExtensionDeactivationReason
+    ) => void | Promise<void>;
 
     loadExtension?: (
         extensionFolderPath: string

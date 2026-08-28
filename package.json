@@ -33,6 +33,7 @@
         "dist-mac-arm64": "electron-builder --arm64 --config electron-builder-mac.yml",
         "tsc-version": "tsc --version",
         "electron-version": "electron --version",
+        "test:extension-platform": "tsc --noEmit --pretty false && tsc --project tests/extension-platform-v1/tsconfig.json && node --test --test-concurrency=1 tests/extension-platform-v1/extension-platform-v1.test.js tests/extension-platform-v1/installation-security.test.js tests/extension-platform-v1/extension-installation.test.js tests/extension-platform-v1/project-store.test.js tests/extension-platform-v1/broker-service.integration.test.js tests/extension-platform-v1/build-concurrency.test.js",
         "publish-types": "cd packages/eez-studio-types && npm publish",
         "pubdoc-dev": "cd tools/pubdoc && tsc && cd build && node pubdoc.js --config ../config/dev.json",
         "pubdoc-prod": "cd tools/pubdoc && tsc && cd build && node pubdoc.js --config ../config/prod.json",

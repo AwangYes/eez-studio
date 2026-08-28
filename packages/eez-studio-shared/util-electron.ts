@@ -49,7 +49,7 @@ export async function zipExtract(zipFilePath: string, destFolderPath: string) {
     return new Promise<void>(async (resolve, reject) => {
         try {
             const { default: AdmZip } = await import("adm-zip");
-            var zip = new AdmZip(zipFilePath);
+            const zip = new AdmZip(zipFilePath);
             zip.extractAllToAsync(destFolderPath, true, true, err => {
                 if (err) {
                     reject(err);
@@ -82,8 +82,12 @@ export async function makeFolder(folderPath: string) {
 export function removeFolder(folderPath: string) {
     return new Promise<void>((resolve, reject) => {
         const rimraf = require("rimraf");
-        rimraf(folderPath, function () {
-            resolve();
+        rimraf(folderPath, function (error: Error | null) {
+            if (error) {
+                reject(error);
+            } else {
+                resolve();
+            }
         });
     });
 }

@@ -15,6 +15,10 @@ import * as FlexLayout from "flexlayout-react";
 
 var sha256 = require("sha256");
 
+const extensionDeveloperMode =
+    process.env.EEZ_STUDIO_EXTENSION_DEVELOPER_MODE == "1" ||
+    process.argv.includes("--extension-developer-mode");
+
 import { compareVersions, studioVersion } from "eez-studio-shared/util";
 import { humanize } from "eez-studio-shared/string";
 
@@ -270,6 +274,7 @@ export class ExtensionsManagerStore {
             switchToInstrumentExtensions: action.bound,
             switchToProjectExtensions: action.bound,
             switchToMeasurementExtensions: action.bound,
+            switchToApplicationExtensions: action.bound,
             onSearchChange: action.bound
         });
     }
@@ -314,6 +319,10 @@ export class ExtensionsManagerStore {
     }
     switchToMeasurementExtensions() {
         this.section = "measurement-functions";
+        this.updateViewFilter();
+    }
+    switchToApplicationExtensions() {
+        this.section = "extension-v1";
         this.updateViewFilter();
     }
 
@@ -687,12 +696,24 @@ export const ExtensionSections = observer(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-async function finishInstall(extensionZipPackageData: any) {
+async function finishInstall(
+    extensionZipPackageData: any,
+    expectedExtension: IExtension
+) {
     const tempFilePath = await getTempFilePath();
 
     await writeBinaryData(tempFilePath, extensionZipPackageData);
 
     const extension = await installExtension(tempFilePath, {
+        source: "catalog",
+        expected: {
+            id: expectedExtension.id,
+            version: expectedExtension.version,
+            extensionType: expectedExtension.extensionType,
+            ...(expectedExtension.publisherFingerprint
+                ? { publisherFingerprint: expectedExtension.publisherFingerprint }
+                : {})
+        },
         notFound() {},
         async confirmReplaceNewerVersion(
             newExtension: IExtension,
@@ -818,7 +839,7 @@ export function downloadAndInstallExtension(
                     }
                 }
 
-                finishInstall(extensionZipFileData)
+                finishInstall(extensionZipFileData, extensionToInstall)
                     .then(extension => {
                         if (extension) {
                             progress.update(progressId, {
@@ -1572,7 +1593,9 @@ const ExtensionsManagerSubNavigation = observer(
                             />
                             {(extensionsManagerStore.section == "iext" ||
                                 extensionsManagerStore.section ==
-                                    "measurement-functions") && (
+                                    "measurement-functions" ||
+                                extensionsManagerStore.section ==
+                                    "extension-v1") && (
                                 <DropdownItem
                                     text="Install Extension"
                                     title="Install extension from local file"
@@ -1638,6 +1661,11 @@ export const ExtensionsManager = observer(
         render() {
             return (
                 <div className="EezStudio_ExtensionsManager">
+                    {extensionDeveloperMode && (
+                        <div className="alert alert-warning m-0 rounded-0">
+                            Extension Developer Mode
+                        </div>
+                    )}
                     <SearchInput
                         searchText={extensionsManagerStore.searchText}
                         onClear={action(() => {
@@ -1647,6 +1675,39 @@ export const ExtensionsManager = observer(
                     />
 
                     <div className="EezStudio_ExtensionsManager_Navigation">
+                        <div
+                            className={classNames(
+                                "EezStudio_ExtensionsManager_NavigationItem",
+                                {
+                                    selected:
+                                        extensionsManagerStore.section ==
+                                        "extension-v1"
+                                }
+                            )}
+                            onClick={
+                                extensionsManagerStore.switchToApplicationExtensions
+                            }
+                        >
+                            <Count
+                                label="Application Extensions"
+                                count={
+                                    extensionsManagerStore.searchText
+                                        ? extensionsManagerStore.extensionsVersionsCatalogBuilder.get(
+                                              "extension-v1",
+                                              ViewFilter.ALL,
+                                              extensionsManagerStore.searchText
+                                          ).length
+                                        : undefined
+                                }
+                                attention={
+                                    extensionsManagerStore.extensionsVersionsCatalogBuilder.get(
+                                        "extension-v1",
+                                        ViewFilter.NEW_VERSIONS,
+                                        ""
+                                    ).length > 0
+                                }
+                            />
+                        </div>
                         <div
                             className={classNames(
                                 "EezStudio_ExtensionsManager_NavigationItem",

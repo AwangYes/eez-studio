@@ -6,5 +6,8 @@ export async function setup() {
     const extensionsFolderPath = getUserDataPath(EXTENSIONS_FOLDER_NAME);
     await makeFolder(extensionsFolderPath);
 
-    loadExtensions([]);
+    await loadExtensions([]);
+
+    // Construct the V1 manager before the Home renderer can announce readiness.
+    await import("main/extensions-v1/manager");
 }

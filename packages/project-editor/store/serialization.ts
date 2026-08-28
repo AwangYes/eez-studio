@@ -89,20 +89,33 @@ export function objectToJson(
     space?: number,
     toJsHook?: (jsObject: any, object: IEezObject) => void
 ) {
-    const saved = {
-        _eez_parent: (object as any)._eez_parent,
-        _eez_propertyInfo: (object as any)._eez_propertyInfo,
-        _eez_id: (object as any)._eez_id,
-        _eez_key: (object as any)._eez_key
-    };
-    delete (object as any)._eez_parent;
-    delete (object as any)._eez_propertyInfo;
-    delete (object as any)._eez_id;
-    delete (object as any)._eez_key;
+    const saved = [
+        "_eez_parent",
+        "_eez_propertyInfo",
+        "_eez_id",
+        "_eez_key"
+    ].map(name => ({
+        name,
+        present: Object.prototype.hasOwnProperty.call(object, name),
+        value: (object as any)[name]
+    }));
+    let jsObject: any;
+    try {
+        delete (object as any)._eez_parent;
+        delete (object as any)._eez_propertyInfo;
+        delete (object as any)._eez_id;
+        delete (object as any)._eez_key;
 
-    let jsObject = toJS(object);
-
-    Object.assign(object, saved);
+        jsObject = toJS(object);
+    } finally {
+        for (const field of saved) {
+            if (field.present) {
+                (object as any)[field.name] = field.value;
+            } else {
+                delete (object as any)[field.name];
+            }
+        }
+    }
 
     if (toJsHook) {
         toJsHook(jsObject, object);

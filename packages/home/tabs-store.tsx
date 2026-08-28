@@ -442,6 +442,9 @@ export class ProjectEditorTab implements IHomeTab {
 
     error: string | undefined;
 
+    private loadPromise: Promise<void> | undefined;
+    private reloadPromise: Promise<void> | undefined;
+
     ProjectContext: React.Context<ProjectStore>;
     ProjectEditor: typeof ProjectEditorView;
 
@@ -450,6 +453,22 @@ export class ProjectEditorTab implements IHomeTab {
     category: HomeTabCategory = "none";
 
     async loadProject() {
+        if (this.loadPromise) {
+            return this.loadPromise;
+        }
+
+        const loadPromise = this.loadProjectSingleFlight();
+        this.loadPromise = loadPromise;
+        try {
+            await loadPromise;
+        } finally {
+            if (this.loadPromise === loadPromise) {
+                this.loadPromise = undefined;
+            }
+        }
+    }
+
+    private async loadProjectSingleFlight() {
         try {
             this.ProjectContext = ProjectContext;
 
@@ -926,6 +945,25 @@ export class ProjectEditorTab implements IHomeTab {
     }
 
     async reloadProject() {
+        if (this.reloadPromise) {
+            return this.reloadPromise;
+        }
+
+        const reloadPromise = this.reloadProjectSingleFlight();
+        this.reloadPromise = reloadPromise;
+        try {
+            await reloadPromise;
+        } finally {
+            if (this.reloadPromise === reloadPromise) {
+                this.reloadPromise = undefined;
+            }
+        }
+    }
+
+    private async reloadProjectSingleFlight() {
+        if (this.loadPromise) {
+            await this.loadPromise;
+        }
         if (!this.projectStore) {
             return;
         }
@@ -942,7 +980,7 @@ export class ProjectEditorTab implements IHomeTab {
             this.projectStore = undefined;
         });
 
-        this.loadProject();
+        await this.loadProject();
 
         if (this.active) {
             this.addListeners();

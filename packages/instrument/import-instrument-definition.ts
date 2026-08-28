@@ -29,7 +29,7 @@ export async function importInstrumentDefinitionAsExtension(filePath: string) {
     try {
         const extension = await installExtension(filePath, {
             checkExtensionType(type: string) {
-                if (type !== "instrument") {
+                if (type !== "iext") {
                     notification.update(progressToastId, {
                         render: "This is not an instrument definition file.",
                         type: notification.ERROR,
