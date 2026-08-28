@@ -24,7 +24,7 @@ export interface ExtensionV1PackageAuthor {
 }
 
 export interface ExtensionV1Configuration {
-    readonly apiVersion: "1.0";
+    readonly apiVersion: "1.0" | "1.1";
     readonly host: "sandbox";
     readonly browser: string;
     readonly activationEvents?: readonly string[];
@@ -502,10 +502,10 @@ function validateConfiguration(value: unknown): ExtensionV1Configuration {
             );
         }
     }
-    if (value.apiVersion !== "1.0") {
+    if (value.apiVersion !== "1.0" && value.apiVersion !== "1.1") {
         throw new ExtensionV1Error(
             "UNSUPPORTED_MANIFEST_VERSION",
-            'eez-studio.apiVersion must be "1.0"',
+            'eez-studio.apiVersion must be "1.0" or "1.1"',
             { details: { field: "eez-studio.apiVersion" } }
         );
     }
@@ -565,7 +565,7 @@ function validateConfiguration(value: unknown): ExtensionV1Configuration {
     }
 
     return Object.freeze({
-        apiVersion: "1.0",
+        apiVersion: value.apiVersion,
         host: "sandbox",
         browser,
         ...(activationEvents === undefined ? {} : { activationEvents }),

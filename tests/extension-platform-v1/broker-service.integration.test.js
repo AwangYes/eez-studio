@@ -736,6 +736,22 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
             "main/extensions-v1/renderer-service-broker": {
                 RendererServiceBroker: FakeRendererServiceBroker
             },
+            "main/extensions-v1/secure-storage-service": {
+                ExtensionSecureStorageService: class {
+                    dispatch() {}
+                }
+            },
+            "main/extensions-v1/observability": {
+                ExtensionObservability: class {
+                    emit() {}
+                    setGauge() {}
+                    snapshot() { return {}; }
+                    async flush() {}
+                }
+            },
+            "eez-studio-shared/extensions/extension-install-journal": {
+                isExtensionInstallDurabilityDegraded: () => false
+            },
             "main/extensions-v1/sandbox-host": {
                 SandboxExtensionHost: FakeSandboxExtensionHost
             }

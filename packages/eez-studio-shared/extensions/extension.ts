@@ -44,7 +44,7 @@ export type {
     ExtensionStorage
 } from "eez-studio-types";
 
-export const EXTENSION_API_VERSION = "1.0" as const;
+export const EXTENSION_API_VERSION = "1.1" as const;
 export const API_VERSION = EXTENSION_API_VERSION;
 
 export interface IEditor {

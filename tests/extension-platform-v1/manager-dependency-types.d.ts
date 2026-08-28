@@ -1,4 +1,19 @@
 export type ExtensionCapability = string;
+export class ExtensionV1Error extends Error {
+    constructor(code: string, message: string, options?: { cause?: unknown });
+    readonly code: string;
+}
+export interface SecureStorageBackend {
+    get(key: string): string | undefined;
+    set(key: string, value: string): void;
+    delete(key: string): void;
+    keys?(): readonly string[];
+}
+export function createElectronExtensionSecureStorage(
+    extensionId: string,
+    publisherFingerprint: string,
+    backend: SecureStorageBackend
+): SecureStorageBackend & { getStorageKey(key: string): string; keys(): readonly string[] };
 export const EXTENSION_SIGNATURE_FILE: string;
 export const TRUSTED_EXTENSION_PUBLISHERS: Readonly<Record<string, string>>;
 export function verifyExtensionPackageSignature(

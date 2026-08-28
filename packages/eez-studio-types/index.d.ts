@@ -3,10 +3,10 @@ import type { Stream } from "stream";
 ////////////////////////////////////////////////////////////////////////////////
 
 /** Public contract version implemented by Extension Platform V1. */
-export const EXTENSION_API_VERSION: "1.0";
+export const EXTENSION_API_VERSION: "1.1";
 export const API_VERSION: typeof EXTENSION_API_VERSION;
 
-export type ExtensionApiVersion = typeof EXTENSION_API_VERSION;
+export type ExtensionApiVersion = "1.0" | "1.1";
 export type ExtensionHostKind = "sandbox";
 export type ExtensionMode = "production" | "development" | "test";
 export type ExtensionDeactivationReason =
@@ -92,6 +92,7 @@ export interface ExtensionSecrets {
     get(key: string): Promise<string | undefined>;
     store(key: string, value: string): Promise<void>;
     delete(key: string): Promise<void>;
+    keys(): Promise<readonly string[]>;
 }
 
 export interface ExtensionServiceDescriptor {
@@ -169,7 +170,11 @@ export type StudioServiceName =
     | "project"
     | "build"
     | "runtime"
-    | "editor";
+    | "editor"
+    | "storage"
+    | "input"
+    | "screenshot"
+    | "asset";
 
 /** Stable error codes that may be reported by the sandbox service host. */
 export type StudioServiceErrorCode =
@@ -201,6 +206,16 @@ export type StudioServiceErrorCode =
     | "PROJECT_TRANSACTION_ROLLBACK_FAILED"
     | "PROJECT_DISK_HASH_CONFLICT"
     | "INVALID_RUNTIME_STATE"
+    | "SECURE_STORAGE_UNAVAILABLE"
+    | "SECURE_STORAGE_CORRUPT"
+    | "SECURE_STORAGE_OPERATION_FAILED"
+    | "SECURE_STORAGE_QUOTA_EXCEEDED"
+    | "ASSET_PATH_UNSAFE"
+    | "ASSET_SOURCE_CHANGED"
+    | "ASSET_SOURCE_UNSAFE"
+    | "ASSET_ROLLBACK_FAILED"
+    | "ARTIFACT_EXPIRED"
+    | "INVALID_INPUT"
     | "STUDIO_SERVICE_ERROR"
     | "SERVICE_ERROR"
     | "INTERNAL";
@@ -402,6 +417,107 @@ export interface StudioEditorObjectParams extends StudioProjectParams {
 export type StudioEditorNavigateParams = StudioEditorObjectParams;
 export type StudioEditorSelectParams = StudioEditorObjectParams;
 
+export interface StudioStorageGetParams {
+    readonly key: string;
+}
+export interface StudioStorageGetResult {
+    readonly value?: string;
+}
+export interface StudioStorageStoreParams {
+    readonly key: string;
+    readonly value: string;
+}
+export interface StudioStorageStoreResult {
+    readonly stored: true;
+}
+export interface StudioStorageDeleteParams {
+    readonly key: string;
+}
+export interface StudioStorageDeleteResult {
+    readonly deleted: true;
+}
+export type StudioStorageKeysParams = StudioEmptyParams;
+export interface StudioStorageKeysResult {
+    readonly keys: readonly string[];
+}
+
+export type StudioInputTarget = "studio-ui" | "runtime";
+export type StudioInputEvent =
+    | { readonly type: "pointer"; readonly action: "move" | "down" | "up"; readonly x: number; readonly y: number; readonly button?: "left" | "middle" | "right"; readonly delayMs?: number }
+    | { readonly type: "key"; readonly action: "down" | "up"; readonly key: string; readonly delayMs?: number }
+    | { readonly type: "text"; readonly value: string; readonly delayMs?: number };
+export interface StudioInputInjectParams {
+    readonly target: StudioInputTarget;
+    readonly projectId?: StudioProjectId;
+    readonly events: readonly StudioInputEvent[];
+}
+export interface StudioInputInjectResult {
+    readonly delivered: number;
+    readonly target: StudioInputTarget;
+}
+
+export interface StudioScreenshotCaptureParams {
+    readonly target?: StudioInputTarget;
+    readonly projectId?: StudioProjectId;
+    readonly format?: "png" | "jpeg";
+    readonly quality?: number;
+    readonly rect?: Readonly<{ x: number; y: number; width: number; height: number }>;
+}
+export interface StudioScreenshotCaptureResult {
+    readonly artifactId: string;
+    readonly mimeType: "image/png" | "image/jpeg";
+    readonly width: number;
+    readonly height: number;
+    readonly byteLength: number;
+    readonly sha256: StudioContentHash;
+    readonly expiresAt: string;
+}
+export interface StudioScreenshotReadArtifactParams {
+    readonly artifactId: string;
+    readonly offset?: number;
+    readonly limit?: number;
+}
+export interface StudioScreenshotReadArtifactResult {
+    readonly artifactId: string;
+    readonly offset: number;
+    readonly nextOffset?: number;
+    readonly data: string;
+    readonly done: boolean;
+}
+export interface StudioScreenshotDeleteArtifactParams {
+    readonly artifactId: string;
+}
+export interface StudioScreenshotDeleteArtifactResult {
+    readonly deleted: boolean;
+}
+
+export type StudioAssetSelectSourceParams = StudioEmptyParams;
+export interface StudioAssetSelectSourceResult {
+    readonly cancelled: boolean;
+    readonly token?: string;
+    readonly name?: string;
+    readonly size?: number;
+    readonly sha256?: StudioContentHash;
+    readonly expiresAt?: string;
+}
+export interface StudioAssetImportParams extends StudioProjectParams {
+    readonly token: string;
+    readonly relativePath: string;
+    readonly replace?: boolean;
+    readonly expectedRevision?: StudioRevision;
+    readonly label?: string;
+    readonly edits?: readonly StudioProjectEdit[];
+}
+export interface StudioAssetImportResult {
+    readonly assetPath: string;
+    readonly sha256: StudioContentHash;
+    readonly byteLength: number;
+    readonly projectId: StudioProjectId;
+    readonly revision: StudioRevision;
+    readonly dirty: boolean;
+    readonly temporaryIds: Readonly<Record<string, StudioObjectId>>;
+}
+
 export interface StudioEditorNavigateResult {
     readonly navigated: true;
     readonly objectId: StudioObjectId;
@@ -417,7 +533,7 @@ export interface StudioServiceMethod<TParams, TResult> {
     readonly result: TResult;
 }
 
-/** Compile-time map for every public Studio service operation in API 1.0. */
+/** Compile-time map for every public Studio service operation in API 1.1. */
 export interface StudioServiceContract {
     readonly workspace: {
         readonly list: StudioServiceMethod<
@@ -517,6 +633,25 @@ export interface StudioServiceContract {
             StudioEditorSelectParams,
             StudioEditorSelectResult
         >;
+    };
+    readonly storage: {
+        readonly get: StudioServiceMethod<StudioStorageGetParams, StudioStorageGetResult>;
+        readonly set: StudioServiceMethod<StudioStorageStoreParams, StudioStorageStoreResult>;
+        readonly store: StudioServiceMethod<StudioStorageStoreParams, StudioStorageStoreResult>;
+        readonly delete: StudioServiceMethod<StudioStorageDeleteParams, StudioStorageDeleteResult>;
+        readonly keys: StudioServiceMethod<StudioStorageKeysParams, StudioStorageKeysResult>;
+    };
+    readonly input: {
+        readonly inject: StudioServiceMethod<StudioInputInjectParams, StudioInputInjectResult>;
+    };
+    readonly screenshot: {
+        readonly capture: StudioServiceMethod<StudioScreenshotCaptureParams, StudioScreenshotCaptureResult>;
+        readonly readArtifact: StudioServiceMethod<StudioScreenshotReadArtifactParams, StudioScreenshotReadArtifactResult>;
+        readonly deleteArtifact: StudioServiceMethod<StudioScreenshotDeleteArtifactParams, StudioScreenshotDeleteArtifactResult>;
+    };
+    readonly asset: {
+        readonly selectSource: StudioServiceMethod<StudioAssetSelectSourceParams, StudioAssetSelectSourceResult>;
+        readonly import: StudioServiceMethod<StudioAssetImportParams, StudioAssetImportResult>;
     };
 }
 
@@ -630,6 +765,8 @@ export type StudioExtensionEvent =
 /** API exposed to an extension's sandboxed browser entry point. */
 export interface SandboxExtensionHostApi {
     readonly instanceId: string;
+    /** Publisher-bound encrypted storage backed by Electron safeStorage. */
+    readonly secrets: ExtensionSecrets;
 
     request<
         TService extends StudioServiceName,

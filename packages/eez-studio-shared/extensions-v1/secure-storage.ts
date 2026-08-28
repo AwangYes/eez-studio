@@ -11,6 +11,7 @@ export interface SecureStorageBackend {
     get(key: string): string | undefined;
     set(key: string, value: string): void;
     delete(key: string): void;
+    keys?(): readonly string[];
 }
 
 export interface ExtensionSecureStorageOptions {
@@ -290,6 +291,7 @@ export class ExtensionSecureStorage {
     }
 
     delete(logicalKey: string): void {
+        this.assertEncryptionAvailable();
         const storageKey = this.getStorageKey(logicalKey);
         try {
             this.backend.delete(storageKey);
@@ -297,6 +299,43 @@ export class ExtensionSecureStorage {
             throw new ExtensionV1Error(
                 "SECURE_STORAGE_OPERATION_FAILED",
                 "Failed to delete extension secure storage",
+                { cause: error }
+            );
+        }
+    }
+
+    keys(): readonly string[] {
+        this.assertEncryptionAvailable();
+        if (typeof this.backend.keys !== "function") {
+            throw new ExtensionV1Error(
+                "SECURE_STORAGE_OPERATION_FAILED",
+                "Secure storage backend does not support key enumeration"
+            );
+        }
+        try {
+            return this.backend
+                .keys()
+                .filter(key => key.startsWith(this.namespacePrefix))
+                .map(key => {
+                    const encoded = key.substring(this.namespacePrefix.length);
+                    if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
+                        throw new Error("Invalid encoded secure storage key");
+                    }
+                    const padding = "=".repeat((4 - (encoded.length % 4)) % 4);
+                    const decoded = Buffer.from(
+                        encoded.replace(/-/g, "+").replace(/_/g, "/") + padding,
+                        "base64"
+                    ).toString("utf8");
+                    return validateLogicalKey(decoded);
+                })
+                .sort();
+        } catch (error) {
+            if (error instanceof ExtensionV1Error) {
+                throw error;
+            }
+            throw new ExtensionV1Error(
+                "SECURE_STORAGE_OPERATION_FAILED",
+                "Failed to enumerate extension secure storage",
                 { cause: error }
             );
         }

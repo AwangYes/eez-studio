@@ -10,6 +10,11 @@ import {
     type ExtensionSignaturePolicy,
     verifyExtensionPackageSignature
 } from "../extensions-v1/package-signature";
+import {
+    durableRename,
+    listExtensionInstallJournals,
+    removeExtensionInstallJournal
+} from "./extension-install-journal";
 
 const SAFE_EXTENSION_FOLDER_NAME = /^[a-z0-9][a-z0-9._-]{0,119}$/;
 const OPAQUE_EXTENSION_FOLDER_NAME = /^%id-[0-9a-f]{64}$/;
@@ -22,6 +27,7 @@ const STAGED_PENDING_NAME = /^pending\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
 const STAGED_INSTALLED_NAME = /^installed\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
 const STAGED_UNINSTALL_NAME = /^uninstall\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
 const STAGED_REMOVED_NAME = /^removed\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
+const DURABLE_JOURNAL_FILE = /^journal\.[A-Za-z0-9_-]+\.json$/;
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
 export const EXTENSION_STAGING_FOLDER_NAME = ".staging";
@@ -226,6 +232,125 @@ export async function recoverExtensionStaging(
     const removeDirectory =
         options.removeDirectory ??
         (folderPath => fs.promises.rm(folderPath, { recursive: true, force: true }));
+    const recoveryErrors: unknown[] = [];
+
+    // Journal recovery runs before legacy marker recovery. A valid journal is
+    // authoritative for its transaction and is removed only after all cleanup
+    // operations complete successfully. This makes restart recovery idempotent.
+    // Keep malformed journals in place for forensic recovery, but allow
+    // independent staging transactions to be reconciled on this startup.
+    const journals = await listExtensionInstallJournals(root, {
+        onError(error, filePath) {
+            const wrapped = new Error(
+                `Failed to read extension install journal ${filePath}`
+            ) as Error & { cause?: unknown };
+            wrapped.cause = error;
+            recoveryErrors.push(wrapped);
+        }
+    });
+    const activeJournalByExtension = new Map<string, string>();
+    const conflictingJournalExtensions = new Set<string>();
+    for (const journal of journals) {
+        if (journal.state == "committed" || journal.state == "rolled-back") {
+            continue;
+        }
+        const previous = activeJournalByExtension.get(journal.extensionId);
+        if (previous && previous != journal.transactionId) {
+            conflictingJournalExtensions.add(journal.extensionId);
+            recoveryErrors.push(
+                new Error(
+                    `Conflicting durable extension transactions: ${journal.extensionId}`
+                )
+            );
+        } else {
+            activeJournalByExtension.set(journal.extensionId, journal.transactionId);
+        }
+    }
+    for (const journal of journals) {
+        if (conflictingJournalExtensions.has(journal.extensionId)) {
+            continue;
+        }
+        const targetFolderName = extensionIdToFolderName(journal.extensionId);
+        if (
+            options.targetExtensionId != undefined &&
+            targetFolderName != extensionIdToFolderName(options.targetExtensionId)
+        ) {
+            continue;
+        }
+        const resolveJournalPath = (relativePath: string | undefined) =>
+            relativePath == undefined ? undefined : path.resolve(root, relativePath);
+        const targetPath = resolveJournalPath(journal.targetRelativePath)!;
+        const incomingPath = resolveJournalPath(journal.incomingRelativePath);
+        const backupPath = resolveJournalPath(journal.backupRelativePath);
+        const stagingPrefix = path.resolve(stagingRoot) + path.sep;
+        if (
+            path.resolve(targetPath) != path.resolve(root, targetFolderName) ||
+            (incomingPath && !path.resolve(incomingPath).startsWith(stagingPrefix)) ||
+            (backupPath && !path.resolve(backupPath).startsWith(stagingPrefix))
+        ) {
+            recoveryErrors.push(
+                new Error(`Extension journal paths do not match ${journal.extensionId}`)
+            );
+            continue;
+        }
+        const exists = async (candidatePath: string | undefined) => {
+            if (!candidatePath) return false;
+            try {
+                await fs.promises.lstat(candidatePath);
+                return true;
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code == "ENOENT") return false;
+                throw error;
+            }
+        };
+        try {
+            const targetExists = await exists(targetPath);
+            if (journal.state == "committed") {
+                // A committed install/update keeps the target; committed
+                // uninstall keeps it absent unless a later reinstall exists.
+                if (journal.operation != "uninstall" && !targetExists) {
+                    throw new Error(
+                        `Committed extension target is missing: ${journal.extensionId}`
+                    );
+                }
+                if (incomingPath) await removeDirectory(incomingPath);
+                if (backupPath) await removeDirectory(backupPath);
+            } else if (journal.state == "rolled-back") {
+                if (incomingPath) await removeDirectory(incomingPath);
+                if (backupPath) await removeDirectory(backupPath);
+            } else if (journal.operation == "uninstall") {
+                // The old package is parked at backupRelativePath until the
+                // uninstall reaches committed. Restore it on interruption.
+                if (!targetExists && backupPath && (await exists(backupPath))) {
+                    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+                    await durableRename(backupPath, targetPath);
+                } else if (backupPath) {
+                    await removeDirectory(backupPath);
+                }
+                if (incomingPath) await removeDirectory(incomingPath);
+            } else if (journal.state == "target-installed") {
+                if (targetExists) await removeDirectory(targetPath);
+                if (backupPath && (await exists(backupPath))) {
+                    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+                    await durableRename(backupPath, targetPath);
+                }
+                if (incomingPath) await removeDirectory(incomingPath);
+            } else {
+                // prepared/incoming-verified/backup-moved: restore an existing
+                // backup and discard the uncommitted incoming package.
+                if (!targetExists && backupPath && (await exists(backupPath))) {
+                    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+                    await durableRename(backupPath, targetPath);
+                } else if (backupPath) {
+                    await removeDirectory(backupPath);
+                }
+                if (incomingPath) await removeDirectory(incomingPath);
+            }
+            await removeExtensionInstallJournal(root, journal.transactionId);
+        } catch (error) {
+            recoveryErrors.push(error);
+        }
+    }
     const entries = await fs.promises.readdir(stagingRoot, {
         withFileTypes: true
     });
@@ -253,7 +378,6 @@ export async function recoverExtensionStaging(
         path: string;
     };
 
-    const recoveryErrors: unknown[] = [];
     const stagedByTarget = new Map<string, StagedEntry[]>();
     const requestedTargetFolderName =
         options.targetExtensionId == undefined
@@ -265,6 +389,12 @@ export async function recoverExtensionStaging(
     )) {
         try {
             const stagedPath = path.join(stagingRoot, entry.name);
+            // Durable journal files are handled above. Keep an unreadable or
+            // unrecoverable journal for the next startup instead of deleting
+            // evidence needed for deterministic recovery.
+            if (DURABLE_JOURNAL_FILE.test(entry.name)) {
+                continue;
+            }
             if (!entry.isDirectory()) {
                 if (requestedTargetFolderName == undefined) {
                     await removeDirectory(stagedPath);

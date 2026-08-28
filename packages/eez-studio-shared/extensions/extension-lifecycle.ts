@@ -47,3 +47,18 @@ export function runExtensionLifecycleOperation<T>(
         );
     });
 }
+
+/** Coordinates cleanup by extension object identity, not extension ID. */
+export class ExtensionLifecycleCoordinator {
+    private cleanupTasks = new WeakMap<object, Promise<void>>();
+
+    cleanupOnce(target: object, cleanup: () => void | Promise<void>) {
+        const existing = this.cleanupTasks.get(target);
+        if (existing) {
+            return existing;
+        }
+        const task = Promise.resolve().then(cleanup);
+        this.cleanupTasks.set(target, task);
+        return task;
+    }
+}

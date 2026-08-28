@@ -17,6 +17,9 @@ import { findHomeWindow } from "main/home-window";
 
 import { ExtensionPermissionManager } from "main/extensions-v1/permission-manager";
 import { RendererServiceBroker } from "main/extensions-v1/renderer-service-broker";
+import { ExtensionSecureStorageService } from "main/extensions-v1/secure-storage-service";
+import { ExtensionObservability } from "main/extensions-v1/observability";
+import { isExtensionInstallDurabilityDegraded } from "eez-studio-shared/extensions/extension-install-journal";
 import {
     SandboxExtensionHost,
     type SandboxExtensionDescriptor
@@ -75,7 +78,18 @@ const SERVICE_CAPABILITIES: Record<string, ExtensionCapability> = {
     "runtime:resume": "runtime.control",
     "runtime:step": "runtime.control",
     "editor:navigate": "project.read",
-    "editor:select": "project.read"
+    "editor:select": "project.read",
+    "storage:get": "storage.secure",
+    "storage:set": "storage.secure",
+    "storage:store": "storage.secure",
+    "storage:delete": "storage.secure",
+    "storage:keys": "storage.secure",
+    "input:inject": "input.inject",
+    "screenshot:capture": "screenshot.capture",
+    "screenshot:readArtifact": "screenshot.capture",
+    "screenshot:deleteArtifact": "screenshot.capture",
+    "asset:selectSource": "asset.import",
+    "asset:import": "asset.import"
 };
 
 function extensionDeclaresCommand(
@@ -103,6 +117,8 @@ function extensionDeclaresCommand(
 
 export class ExtensionV1Manager {
     private readonly broker = new RendererServiceBroker();
+    private readonly secureStorage = new ExtensionSecureStorageService();
+    private readonly observability = new ExtensionObservability();
     private readonly permissions = new ExtensionPermissionManager();
     private readonly hosts = new Map<string, SandboxExtensionHost>();
     private readonly activationTasks = new Map<string, Promise<boolean>>();
@@ -112,6 +128,14 @@ export class ExtensionV1Manager {
     private activating: Promise<void> | undefined;
     private readyReconciliation: Promise<void> | undefined;
     private disposed = false;
+
+    getMetrics() {
+        this.observability.setGauge(
+            "installDurability.degraded",
+            isExtensionInstallDurabilityDegraded() ? 1 : 0
+        );
+        return this.observability.snapshot();
+    }
 
     private readonly readyListener = (
         event: Electron.IpcMainEvent,
@@ -279,6 +303,7 @@ export class ExtensionV1Manager {
         const previousHost = this.hosts.get(extensionId);
         if (previousHost) {
             this.hosts.delete(extensionId);
+            this.observability.setGauge("activeHosts", this.hosts.size);
             try {
                 await previousHost.deactivate(
                     operation == "install" ? "replace" : "uninstall"
@@ -363,6 +388,7 @@ export class ExtensionV1Manager {
         const previousHost = this.hosts.get(extension.id);
         if (previousHost) {
             this.hosts.delete(extension.id);
+            this.observability.setGauge("activeHosts", this.hosts.size);
             try {
                 await previousHost.deactivate("reload");
             } catch (error) {
@@ -501,8 +527,10 @@ export class ExtensionV1Manager {
             error.code = "METHOD_NOT_FOUND";
             throw error;
         }
-        const scope = await this.workspaceScope(args, signal);
-        await this.permissions.authorize({
+        const scope = service === "storage" ? "secure-storage" : await this.workspaceScope(args, signal);
+        const startedAt = Date.now();
+        try {
+            await this.permissions.authorize({
             extensionId: extension.id,
             extensionName: extension.displayName || extension.name,
             publisherKeyId: extension.publisherKeyId,
@@ -510,14 +538,74 @@ export class ExtensionV1Manager {
             requestedCapabilities: extension.manifest?.capabilities ?? [],
             capability,
             workspaceScope: scope
-        });
-        return this.broker.dispatch(
-            extension.id,
+            });
+            this.observability.emit({
+                type: "permission.granted",
+                extensionId: extension.id,
+                publisherFingerprint: extension.publisherFingerprint,
+                capability,
+                workspaceScope: scope
+            });
+        } catch (error) {
+            this.observability.emit({
+                type: "permission.denied",
+                extensionId: extension.id,
+                publisherFingerprint: extension.publisherFingerprint,
+                capability,
+                workspaceScope: scope,
+                resultCode: (error as { code?: string })?.code
+            });
+            throw error;
+        }
+        this.observability.emit({
+            type: "service.started",
+            extensionId: extension.id,
+            publisherFingerprint: extension.publisherFingerprint,
             service,
             method,
-            args,
-            signal
-        );
+            capability,
+            workspaceScope: scope
+        });
+        try {
+            const result = service === "storage"
+                ? this.secureStorage.dispatch(
+                      extension.id,
+                      extension.publisherFingerprint,
+                      method,
+                      args
+                  )
+                : await this.broker.dispatch(
+                      extension.id,
+                      service,
+                      method,
+                      args,
+                      signal
+                  );
+            this.observability.emit({
+                type: "service.completed",
+                extensionId: extension.id,
+                publisherFingerprint: extension.publisherFingerprint,
+                service,
+                method,
+                capability,
+                durationMs: Date.now() - startedAt,
+                workspaceScope: scope
+            });
+            return result;
+        } catch (error) {
+            this.observability.emit({
+                type: signal.aborted ? "service.cancelled" : "service.failed",
+                extensionId: extension.id,
+                publisherFingerprint: extension.publisherFingerprint,
+                service,
+                method,
+                capability,
+                durationMs: Date.now() - startedAt,
+                workspaceScope: scope,
+                resultCode: (error as { code?: string })?.code
+            });
+            throw error;
+        }
     }
 
     async activateRegisteredExtensions() {
@@ -578,6 +666,11 @@ export class ExtensionV1Manager {
         extension: IExtension,
         descriptor: SandboxExtensionDescriptor
     ) {
+        this.observability.emit({
+            type: "host.activation.started",
+            extensionId: extension.id,
+            publisherFingerprint: extension.publisherFingerprint
+        });
         const host = new SandboxExtensionHost(
             descriptor,
             request =>
@@ -591,8 +684,14 @@ export class ExtensionV1Manager {
             () => {
                 if (this.hosts.get(extension.id) === host) {
                     this.hosts.delete(extension.id);
+                    this.observability.setGauge("activeHosts", this.hosts.size);
                     this.pendingCommands.delete(extension.id);
                     this.failedHosts.add(extension.id);
+                    this.observability.emit({
+                        type: "host.unexpected-exit",
+                        extensionId: extension.id,
+                        publisherFingerprint: extension.publisherFingerprint
+                    });
                     console.error(
                         `Sandbox extension exited unexpectedly: ${extension.id}`
                     );
@@ -607,6 +706,12 @@ export class ExtensionV1Manager {
                 return false;
             }
             this.hosts.set(extension.id, host);
+            this.observability.setGauge("activeHosts", this.hosts.size);
+            this.observability.emit({
+                type: "host.activation.completed",
+                extensionId: extension.id,
+                publisherFingerprint: extension.publisherFingerprint
+            });
             const commands = this.pendingCommands.get(extension.id) ?? [];
             this.pendingCommands.delete(extension.id);
             for (const commandId of commands) {
@@ -624,9 +729,17 @@ export class ExtensionV1Manager {
             }
             if (this.hosts.get(extension.id) === host) {
                 this.hosts.delete(extension.id);
+                this.observability.setGauge("activeHosts", this.hosts.size);
             }
             this.pendingCommands.delete(extension.id);
             this.failedHosts.add(extension.id);
+            this.observability.emit({
+                type: "host.activation.failed",
+                extensionId: extension.id,
+                publisherFingerprint: extension.publisherFingerprint,
+                resultCode: (error as { code?: string })?.code,
+                details: { message: error instanceof Error ? error.message : String(error) }
+            });
             console.error(
                 `Failed to activate sandbox extension ${extension.id}`,
                 error
@@ -665,7 +778,9 @@ export class ExtensionV1Manager {
             this.failedHosts.clear();
             this.activationTasks.clear();
             this.hosts.clear();
+            this.observability.setGauge("activeHosts", 0);
             this.broker.dispose();
+            await this.observability.flush();
         }
     }
 }

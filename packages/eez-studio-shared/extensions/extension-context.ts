@@ -77,6 +77,10 @@ class MemorySecrets implements ExtensionSecrets {
     async delete(key: string) {
         this.values.delete(key);
     }
+
+    async keys() {
+        return Array.from(this.values.keys());
+    }
 }
 
 class ScopedServiceRegistry implements ExtensionServiceRegistry {

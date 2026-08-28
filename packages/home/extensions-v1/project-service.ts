@@ -36,6 +36,8 @@ import {
     isValidStudioCreateValue,
     isValidStudioScalarValue
 } from "home/extensions-v1/project-service-utils";
+import { registerInteractionExtensionServices } from "home/extensions-v1/interaction-service";
+import { describeObjectClass } from "home/extensions-v1/schema";
 
 interface ProjectHandleDto {
     projectId: string;
@@ -167,7 +169,7 @@ function requireTab(projectId: string) {
     return tab;
 }
 
-function requireStore(projectId: string) {
+export function requireStore(projectId: string) {
     const tab = requireTab(projectId);
     if (!tab.projectStore || !tab.projectStore.project?._fullyLoaded) {
         serviceError("PROJECT_NOT_READY", `Project is not ready: ${projectId}`);
@@ -499,7 +501,7 @@ async function workspaceService(request: StudioServiceRequest) {
     serviceError("METHOD_NOT_FOUND", `Unknown workspace method: ${request.method}`);
 }
 
-async function projectService(request: StudioServiceRequest) {
+export async function projectService(request: StudioServiceRequest) {
     const args = (request.args ?? {}) as any;
     const { tab, store } = requireStore(args.projectId);
     if (request.method === "describe") {
@@ -549,17 +551,9 @@ async function projectService(request: StudioServiceRequest) {
         for (const [type, objectClass] of store.importedActionComponentClasses) {
             objectClasses.set(type, objectClass);
         }
-        return Array.from(objectClasses, ([type, objectClass]) => ({
-            type,
-            properties: objectClass.classInfo.properties.map(property => ({
-                name: property.name,
-                type: TYPE_NAMES[property.type],
-                required: property.isOptional !== true,
-                conditionallyRequired:
-                    typeof property.isOptional == "function" || undefined,
-                readOnly: !!property.computed && !property.modifiable
-            }))
-        }));
+        return Array.from(objectClasses, ([, objectClass]) =>
+            describeObjectClass(objectClass)
+        );
     }
     if (request.method === "applyEdits") {
         const edits = args.edits as unknown[];
@@ -755,6 +749,16 @@ export function registerProjectExtensionServices() {
         studioExtensionServiceHost.register(
             "$extensionHost",
             extensionHostService
+        ),
+        ...registerInteractionExtensionServices({
+            resolveProject(projectId) {
+                return requireStore(projectId);
+            },
+            applyProjectEdits(request) {
+                return projectService(request);
+            }
+        }).map(({ service, handler }) =>
+            studioExtensionServiceHost.register(service, handler)
         )
     ];
 }

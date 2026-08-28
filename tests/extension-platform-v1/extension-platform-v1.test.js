@@ -364,7 +364,8 @@ test("secure storage namespaces encrypted values with injected substitutes", () 
     const backend = {
         get: key => values.get(key),
         set: (key, value) => values.set(key, value),
-        delete: key => values.delete(key)
+        delete: key => values.delete(key),
+        keys: () => Array.from(values.keys())
     };
     const encryption = {
         isEncryptionAvailable: () => true,
@@ -392,6 +393,7 @@ test("secure storage namespaces encrypted values with injected substitutes", () 
     second.set("token", "second secret");
     assert.equal(first.get("token"), "first secret");
     assert.equal(second.get("token"), "second secret");
+    assert.deepEqual(first.keys(), ["token"]);
     assert.notEqual(first.getStorageKey("token"), second.getStorageKey("token"));
     const replacement = new extensionV1.ExtensionSecureStorage(
         "@example/first",

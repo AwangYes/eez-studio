@@ -70,6 +70,21 @@ ipcRenderer.on(EVENT_CHANNEL, (_event, event: unknown) => {
     }
 });
 
+function requestSecureStorage(method: string, args: unknown) {
+    requirePublicRequest("storage", method);
+    const requestId = nextRequestId++;
+    return new Promise((resolve, reject) => {
+        pending.set(requestId, { resolve, reject });
+        ipcRenderer.send(REQUEST_CHANNEL, {
+            instanceId,
+            requestId,
+            service: "storage",
+            method,
+            args
+        });
+    });
+}
+
 contextBridge.exposeInMainWorld("eezExtensionHost", {
     instanceId,
     request(service: string, method: string, args: unknown) {
@@ -95,6 +110,26 @@ contextBridge.exposeInMainWorld("eezExtensionHost", {
             method,
             args
         });
+    },
+    secrets: {
+        async get(key: string) {
+            const result = (await requestSecureStorage("get", { key })) as {
+                value?: string;
+            };
+            return result.value;
+        },
+        async store(key: string, value: string) {
+            await requestSecureStorage("store", { key, value });
+        },
+        async delete(key: string) {
+            await requestSecureStorage("delete", { key });
+        },
+        async keys() {
+            const result = (await requestSecureStorage("keys", {})) as {
+                keys: string[];
+            };
+            return result.keys;
+        }
     },
     subscribe(listener: (event: unknown) => void) {
         if (typeof listener !== "function") {

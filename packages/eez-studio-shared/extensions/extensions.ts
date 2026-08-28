@@ -16,7 +16,6 @@ import { firstWord } from "eez-studio-shared/string";
 import { registerSource, sendMessage, watch } from "eez-studio-shared/notify";
 
 import {
-    EXTENSION_API_VERSION,
     ExtensionDeactivationReason,
     ExtensionManifest,
     IExtension,
@@ -49,9 +48,18 @@ import {
 import {
     EXTENSION_ACTIVATION_TIMEOUT_MS,
     EXTENSION_CLEANUP_TIMEOUT_MS,
+    ExtensionLifecycleCoordinator,
     runExtensionLifecycleOperation
 } from "eez-studio-shared/extensions/extension-lifecycle";
 import { ExtensionOperationQueue } from "eez-studio-shared/extensions/extension-operation-queue";
+import {
+    advanceExtensionInstallJournal,
+    beginExtensionInstallJournal,
+    durableRename,
+    hashExtensionDirectory,
+    removeExtensionInstallJournal,
+    syncExtensionTree
+} from "eez-studio-shared/extensions/extension-install-journal";
 
 import {
     preInstalledExtensionsFolderPath,
@@ -79,6 +87,10 @@ interface ActivatedExtension {
 }
 
 const activatedExtensions = new Map<string, ActivatedExtension>();
+// Deactivation is keyed by object identity so concurrent reload/uninstall
+// requests share one bounded cleanup operation. A new generation with the
+// same extension ID cannot be removed by an older generation's finally block.
+const lifecycleCoordinator = new ExtensionLifecycleCoordinator();
 const extensionOperationQueue = new ExtensionOperationQueue();
 
 function isPathInsideOrEqual(candidatePath: string, rootPath: string) {
@@ -300,6 +312,7 @@ async function deactivateExtension(
     extension: IExtension,
     reason: ExtensionDeactivationReason
 ) {
+    await lifecycleCoordinator.cleanupOnce(extension as object, async () => {
     const state = activatedExtensions.get(extension.id);
     if (state?.context) {
         state.context.abort();
@@ -329,7 +342,10 @@ async function deactivateExtension(
         await state.context.dispose(EXTENSION_CLEANUP_TIMEOUT_MS);
     }
 
-    activatedExtensions.delete(extension.id);
+    if (activatedExtensions.get(extension.id)?.extension === extension) {
+        activatedExtensions.delete(extension.id);
+    }
+    });
 }
 
 export async function registerExtension(
@@ -348,7 +364,7 @@ export async function registerExtension(
             context = new ManagedExtensionContext(
                 extension.id,
                 extension.version,
-                extension.apiVersion || EXTENSION_API_VERSION
+                extension.apiVersion || extension.manifest?.apiVersion || "1.0"
             );
             const activationDisposable = await runExtensionLifecycleOperation(
                 extension.id,
@@ -681,16 +697,51 @@ async function finishImportExtensionFromTempFolder({
                 throw error;
             }
         }
+        const journalTransactionId = guid();
+        const relativePath = (value: string) => path.relative(extensionsFolderPath, value);
+        let journal;
+        try {
+            const oldDigest =
+                existingExtension && (await fileExists(extensionFolderPath))
+                    ? await hashExtensionDirectory(extensionFolderPath)
+                    : undefined;
+            const newDigest = await hashExtensionDirectory(tmpExtensionFolderPath);
+            await syncExtensionTree(tmpExtensionFolderPath);
+            journal = await beginExtensionInstallJournal(extensionsFolderPath, {
+                transactionId: journalTransactionId,
+                extensionId: extension.id,
+                operation: existingExtension ? "update" : "install",
+                targetRelativePath: relativePath(extensionFolderPath),
+                incomingRelativePath: relativePath(tmpExtensionFolderPath),
+                backupRelativePath: relativePath(backupFolderPath),
+                oldDigest,
+                newDigest,
+                publisherFingerprint: extension.publisherFingerprint
+            });
+        } catch (error) {
+            await removeFolder(tmpExtensionFolderPath).catch(cleanupError =>
+                console.error(
+                    `Failed to remove unjournaled extension staging folder for ${extension.id}`,
+                    cleanupError
+                )
+            );
+            throw error;
+        }
         let backupCreated = false;
         let pendingInstallCreated = false;
         let replacementInstalled = false;
         try {
+            await advanceExtensionInstallJournal(
+                extensionsFolderPath,
+                journal.transactionId,
+                "incoming-verified"
+            );
             if (existingExtension) {
                 await deactivateExtension(existingExtension, "replace");
                 action(() => extensions.delete(existingExtension.id))();
             }
             if (await fileExists(extensionFolderPath)) {
-                await renameFile(extensionFolderPath, backupFolderPath);
+                await durableRename(extensionFolderPath, backupFolderPath);
                 backupCreated = true;
             } else {
                 await fs.promises.mkdir(pendingInstallPath, {
@@ -698,8 +749,18 @@ async function finishImportExtensionFromTempFolder({
                 });
                 pendingInstallCreated = true;
             }
-            await renameFile(tmpExtensionFolderPath, extensionFolderPath);
+            await advanceExtensionInstallJournal(
+                extensionsFolderPath,
+                journal.transactionId,
+                "backup-moved"
+            );
+            await durableRename(tmpExtensionFolderPath, extensionFolderPath);
             replacementInstalled = true;
+            await advanceExtensionInstallJournal(
+                extensionsFolderPath,
+                journal.transactionId,
+                "target-installed"
+            );
 
             const reloadedExtension = await loadExtension(
                 extensionFolderPath,
@@ -711,8 +772,13 @@ async function finishImportExtensionFromTempFolder({
             loadExtensionTasks.delete(extensionFolderPath);
             await notifyExtensionV1Changed("install", reloadedExtension.id);
             const registered = await registerExtension(reloadedExtension);
+            await advanceExtensionInstallJournal(
+                extensionsFolderPath,
+                journal.transactionId,
+                "committed"
+            );
             if (backupCreated) {
-                await renameFile(backupFolderPath, committedFolderPath);
+                await durableRename(backupFolderPath, committedFolderPath);
                 backupCreated = false;
                 try {
                     await removeFolder(committedFolderPath);
@@ -723,7 +789,7 @@ async function finishImportExtensionFromTempFolder({
                     );
                 }
             } else if (pendingInstallCreated) {
-                await renameFile(pendingInstallPath, installedMarkerPath);
+                await durableRename(pendingInstallPath, installedMarkerPath);
                 pendingInstallCreated = false;
                 try {
                     await removeFolder(installedMarkerPath);
@@ -734,8 +800,17 @@ async function finishImportExtensionFromTempFolder({
                     );
                 }
             }
+            await removeExtensionInstallJournal(
+                extensionsFolderPath,
+                journal.transactionId
+            );
             return registered;
         } catch (error) {
+            await advanceExtensionInstallJournal(
+                extensionsFolderPath,
+                journal.transactionId,
+                "rolled-back"
+            ).catch(() => undefined);
             const failedExtension = extensions.get(extension.id);
             if (failedExtension) {
                 await deactivateExtension(failedExtension, "activation-error");
@@ -747,7 +822,7 @@ async function finishImportExtensionFromTempFolder({
                 await removeFolder(tmpExtensionFolderPath);
             }
             if (backupCreated) {
-                await renameFile(backupFolderPath, extensionFolderPath);
+                await durableRename(backupFolderPath, extensionFolderPath);
                 clearExtensionRequireCache(extensionFolderPath);
                 const restored = await loadExtension(
                     extensionFolderPath,
@@ -1060,15 +1135,40 @@ async function uninstallExtensionUnlocked(extensionId: string) {
                 extensionId,
                 transactionId
             );
+            const journal = await beginExtensionInstallJournal(
+                extensionsFolderPath,
+                {
+                    transactionId,
+                    extensionId,
+                    operation: "uninstall",
+                    targetRelativePath: path.relative(
+                        extensionsFolderPath,
+                        extensionFolderPath
+                    ),
+                    backupRelativePath: path.relative(
+                        extensionsFolderPath,
+                        uninstallFolderPath
+                    ),
+                    oldDigest: (await fileExists(extensionFolderPath))
+                        ? await hashExtensionDirectory(extensionFolderPath)
+                        : undefined,
+                    publisherFingerprint: extension.publisherFingerprint
+                }
+            );
             let moved = false;
             try {
                 if (await fileExists(extensionFolderPath)) {
-                    await renameFile(extensionFolderPath, uninstallFolderPath);
+                    await durableRename(extensionFolderPath, uninstallFolderPath);
                     moved = true;
                 }
+                await advanceExtensionInstallJournal(
+                    extensionsFolderPath,
+                    journal.transactionId,
+                    "backup-moved"
+                );
                 await notifyExtensionV1Changed("uninstall", extensionId);
                 if (moved) {
-                    await renameFile(uninstallFolderPath, removedFolderPath);
+                    await durableRename(uninstallFolderPath, removedFolderPath);
                     moved = false;
                     try {
                         await removeFolder(removedFolderPath);
@@ -1079,9 +1179,23 @@ async function uninstallExtensionUnlocked(extensionId: string) {
                         );
                     }
                 }
+                await advanceExtensionInstallJournal(
+                    extensionsFolderPath,
+                    journal.transactionId,
+                    "committed"
+                );
+                await removeExtensionInstallJournal(
+                    extensionsFolderPath,
+                    journal.transactionId
+                );
             } catch (error) {
+                await advanceExtensionInstallJournal(
+                    extensionsFolderPath,
+                    journal.transactionId,
+                    "rolled-back"
+                ).catch(() => undefined);
                 if (moved && (await fileExists(uninstallFolderPath))) {
-                    await renameFile(uninstallFolderPath, extensionFolderPath);
+                    await durableRename(uninstallFolderPath, extensionFolderPath);
                 }
                 if (await fileExists(extensionFolderPath)) {
                     const restored = await loadExtension(extensionFolderPath);
