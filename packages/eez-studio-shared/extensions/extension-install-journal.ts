@@ -188,6 +188,21 @@ async function syncDirectory(directoryPath: string) {
     }
 }
 
+async function syncFileHandle(handle: fs.promises.FileHandle) {
+    try {
+        await handle.sync();
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (
+            process.platform != "win32" ||
+            (code != "EPERM" && code != "EINVAL" && code != "ENOTSUP")
+        ) {
+            throw error;
+        }
+        durabilityDegraded = true;
+    }
+}
+
 async function durableWrite(filePath: string, contents: string) {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     const temporaryPath = `${filePath}.${process.pid}.${crypto
@@ -197,7 +212,7 @@ async function durableWrite(filePath: string, contents: string) {
     try {
         handle = await fs.promises.open(temporaryPath, "wx", 0o600);
         await handle.writeFile(contents, "utf8");
-        await handle.sync();
+        await syncFileHandle(handle);
         await handle.close();
         handle = undefined;
         await fs.promises.rename(temporaryPath, filePath);
@@ -385,7 +400,7 @@ export async function syncExtensionTree(directoryPath: string) {
             } else if (entry.isFile()) {
                 const handle = await fs.promises.open(entryPath, "r");
                 try {
-                    await handle.sync();
+                    await syncFileHandle(handle);
                 } finally {
                     await handle.close();
                 }
