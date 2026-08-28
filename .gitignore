@@ -48,3 +48,6 @@ tools/lvgl-api/build
 /test/**
 
 .claude
+
+# Local linked worktrees
+.worktrees/
