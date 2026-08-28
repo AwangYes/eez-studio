@@ -56,11 +56,31 @@ export interface ExtensionDurabilityAdapter {
     syncDirectory(directoryPath: string): Promise<void>;
 }
 
+export type ExtensionInstallCheckpoint =
+    | "prepared"
+    | "incoming-verified"
+    | "backup-moved"
+    | "target-installed"
+    | "committed"
+    | "rolled-back";
+
+export type ExtensionInstallCheckpointHandler = (
+    checkpoint: ExtensionInstallCheckpoint,
+    record: ExtensionInstallJournalRecord
+) => Promise<void>;
+
 let durabilityAdapter: ExtensionDurabilityAdapter | undefined;
 export function setExtensionDurabilityAdapter(
     adapter: ExtensionDurabilityAdapter | undefined
 ) {
     durabilityAdapter = adapter;
+}
+
+async function checkpoint(
+    handler: ExtensionInstallCheckpointHandler | undefined,
+    record: ExtensionInstallJournalRecord
+) {
+    await handler?.(record.state, record);
 }
 
 function payload(record: Omit<ExtensionInstallJournalRecord, "checksum">) {
@@ -376,4 +396,240 @@ export async function syncExtensionTree(directoryPath: string) {
         await syncDirectory(currentPath);
     }
     await visit(directoryPath);
+}
+
+async function pathExists(candidatePath: string) {
+    try {
+        await fs.promises.lstat(candidatePath);
+        return true;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code == "ENOENT") return false;
+        throw error;
+    }
+}
+
+export interface DurableExtensionInstallOptions<T> {
+    root: string;
+    transactionId: string;
+    extensionId: string;
+    operation: "install" | "update";
+    targetPath: string;
+    incomingPath: string;
+    backupPath: string;
+    committedBackupPath: string;
+    pendingInstallPath: string;
+    installedMarkerPath: string;
+    publisherFingerprint?: string;
+    beforeTargetSwap?: () => Promise<void>;
+    commit: () => Promise<T>;
+    rollback?: (context: { previousTargetAvailable: boolean }) => Promise<void>;
+    removeDirectory: (folderPath: string) => Promise<void>;
+    reportCleanupError?: (error: unknown, folderPath: string) => void;
+    checkpoint?: ExtensionInstallCheckpointHandler;
+}
+
+/** Execute the durable filesystem portion of the production install/update path. */
+export async function runDurableExtensionInstall<T>(
+    options: DurableExtensionInstallOptions<T>
+) {
+    const relativePath = (value: string) => path.relative(options.root, value);
+    const oldDigest =
+        options.operation == "update" && (await pathExists(options.targetPath))
+            ? await hashExtensionDirectory(options.targetPath)
+            : undefined;
+    const newDigest = await hashExtensionDirectory(options.incomingPath);
+    await syncExtensionTree(options.incomingPath);
+    let record = await beginExtensionInstallJournal(options.root, {
+        transactionId: options.transactionId,
+        extensionId: options.extensionId,
+        operation: options.operation,
+        targetRelativePath: relativePath(options.targetPath),
+        incomingRelativePath: relativePath(options.incomingPath),
+        backupRelativePath: relativePath(options.backupPath),
+        oldDigest,
+        newDigest,
+        publisherFingerprint: options.publisherFingerprint
+    });
+    await checkpoint(options.checkpoint, record);
+
+    let backupCreated = false;
+    let pendingInstallCreated = false;
+    let replacementInstalled = false;
+    let committed = false;
+    try {
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "incoming-verified"
+        );
+        await checkpoint(options.checkpoint, record);
+        await options.beforeTargetSwap?.();
+
+        if (await pathExists(options.targetPath)) {
+            await durableRename(options.targetPath, options.backupPath);
+            backupCreated = true;
+        } else {
+            await fs.promises.mkdir(options.pendingInstallPath, {
+                recursive: false
+            });
+            pendingInstallCreated = true;
+        }
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "backup-moved"
+        );
+        await checkpoint(options.checkpoint, record);
+
+        await durableRename(options.incomingPath, options.targetPath);
+        replacementInstalled = true;
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "target-installed"
+        );
+        await checkpoint(options.checkpoint, record);
+
+        const result = await options.commit();
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "committed"
+        );
+        committed = true;
+        await checkpoint(options.checkpoint, record);
+
+        if (backupCreated) {
+            await durableRename(options.backupPath, options.committedBackupPath);
+            backupCreated = false;
+            try {
+                await options.removeDirectory(options.committedBackupPath);
+            } catch (error) {
+                options.reportCleanupError?.(error, options.committedBackupPath);
+            }
+        } else if (pendingInstallCreated) {
+            await durableRename(options.pendingInstallPath, options.installedMarkerPath);
+            pendingInstallCreated = false;
+            try {
+                await options.removeDirectory(options.installedMarkerPath);
+            } catch (error) {
+                options.reportCleanupError?.(error, options.installedMarkerPath);
+            }
+        }
+        await removeExtensionInstallJournal(options.root, options.transactionId);
+        return result;
+    } catch (error) {
+        if (committed) throw error;
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "rolled-back"
+        );
+        await checkpoint(options.checkpoint, record);
+        if (replacementInstalled && (await pathExists(options.targetPath))) {
+            await options.removeDirectory(options.targetPath);
+        } else if (await pathExists(options.incomingPath)) {
+            await options.removeDirectory(options.incomingPath);
+        }
+        let previousTargetAvailable = false;
+        if (backupCreated && (await pathExists(options.backupPath))) {
+            await durableRename(options.backupPath, options.targetPath);
+            previousTargetAvailable = true;
+        } else if (
+            pendingInstallCreated &&
+            (await pathExists(options.pendingInstallPath))
+        ) {
+            await options.removeDirectory(options.pendingInstallPath);
+        }
+        if (
+            options.operation == "update" &&
+            (await pathExists(options.targetPath))
+        ) {
+            previousTargetAvailable = true;
+        }
+        await options.rollback?.({ previousTargetAvailable });
+        throw error;
+    }
+}
+
+export interface DurableExtensionUninstallOptions {
+    root: string;
+    transactionId: string;
+    extensionId: string;
+    targetPath: string;
+    backupPath: string;
+    removedPath: string;
+    publisherFingerprint?: string;
+    commit: () => Promise<void>;
+    rollback?: () => Promise<void>;
+    removeDirectory: (folderPath: string) => Promise<void>;
+    reportCleanupError?: (error: unknown, folderPath: string) => void;
+    checkpoint?: ExtensionInstallCheckpointHandler;
+}
+
+/** Execute the durable filesystem portion of the production uninstall path. */
+export async function runDurableExtensionUninstall(
+    options: DurableExtensionUninstallOptions
+) {
+    const targetExists = await pathExists(options.targetPath);
+    let record = await beginExtensionInstallJournal(options.root, {
+        transactionId: options.transactionId,
+        extensionId: options.extensionId,
+        operation: "uninstall",
+        targetRelativePath: path.relative(options.root, options.targetPath),
+        backupRelativePath: path.relative(options.root, options.backupPath),
+        oldDigest: targetExists
+            ? await hashExtensionDirectory(options.targetPath)
+            : undefined,
+        publisherFingerprint: options.publisherFingerprint
+    });
+    await checkpoint(options.checkpoint, record);
+
+    let moved = false;
+    let committed = false;
+    try {
+        if (targetExists) {
+            await durableRename(options.targetPath, options.backupPath);
+            moved = true;
+        }
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "backup-moved"
+        );
+        await checkpoint(options.checkpoint, record);
+
+        await options.commit();
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "committed"
+        );
+        committed = true;
+        await checkpoint(options.checkpoint, record);
+
+        if (moved) {
+            await durableRename(options.backupPath, options.removedPath);
+            moved = false;
+            try {
+                await options.removeDirectory(options.removedPath);
+            } catch (error) {
+                options.reportCleanupError?.(error, options.removedPath);
+            }
+        }
+        await removeExtensionInstallJournal(options.root, options.transactionId);
+    } catch (error) {
+        if (committed) throw error;
+        record = await advanceExtensionInstallJournal(
+            options.root,
+            options.transactionId,
+            "rolled-back"
+        );
+        await checkpoint(options.checkpoint, record);
+        if (moved && (await pathExists(options.backupPath))) {
+            await durableRename(options.backupPath, options.targetPath);
+        }
+        await options.rollback?.();
+        throw error;
+    }
 }

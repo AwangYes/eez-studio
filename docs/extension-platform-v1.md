@@ -1,8 +1,11 @@
-# Extension Platform 1.0
+# Extension Platform 1.1
 
-Extension Platform 1.0 runs package browser entries in an isolated Electron
+Extension Platform 1.1 runs package browser entries in an isolated Electron
 sandbox and exposes Studio operations through a capability-gated service host.
 The public TypeScript contract is published by `eez-studio-types`.
+API 1.1 accepts and preserves API 1.0 manifests. Service access is controlled
+by the corresponding manifest capability, including for compatible 1.0
+manifests.
 
 The service boundary uses stable JSON data transfer objects (DTOs). Extension
 code must not depend on Studio implementation objects such as `ProjectStore`,
@@ -10,7 +13,7 @@ MobX observables, React components, Electron IPC objects, or object prototypes.
 
 ## Package manifest
 
-An Extension Platform 1.0 package declares its metadata in the root
+An Extension Platform package declares its metadata in the root
 `package.json`:
 
 ```json
@@ -20,7 +23,7 @@ An Extension Platform 1.0 package declares its metadata in the root
   "displayName": "My Extension",
   "author": "Example",
   "eez-studio": {
-    "apiVersion": "1.0",
+    "apiVersion": "1.1",
     "host": "sandbox",
     "browser": "dist/extension.js",
     "activationEvents": ["onStartup"],
@@ -37,7 +40,7 @@ closed object with these fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `apiVersion` | yes | Must be `"1.0"`. |
+| `apiVersion` | yes | `"1.0"` or `"1.1"`. |
 | `host` | yes | Must be `"sandbox"`. |
 | `browser` | yes | Package-relative JavaScript module loaded in the sandbox. |
 | `activationEvents` | no | Activation declarations. `onStartup` is the current startup convention. |
@@ -54,7 +57,7 @@ exact, for example `https://api.example.com` or
 and HTTP origins are not accepted.
 
 The current host activates registered V1 extensions after the Studio home
-renderer is ready. The manifest parser records all activation events, but 1.0
+renderer is ready. The manifest parser records all activation events, but Studio
 does not yet provide general lazy activation routing beyond startup.
 
 ### Home section contributions
@@ -139,18 +142,18 @@ for the resolved workspace scope.
 
 | Service | Methods | Required capability | Availability |
 | --- | --- | --- | --- |
-| `workspace` | `list`, `activate` | `project.read` | Public in 1.0 |
-| `workspace` | `open`, `reload`, `close` | `project.manage` | Public in 1.0 |
-| `project` | `describe`, `snapshot`, `getObject`, `getSchema` | `project.read` | Public in 1.0 |
-| `project` | `applyEdits`, `save`, `undo`, `redo` | `project.write` | Public in 1.0 |
-| `build` | `check`, `run` | `build.execute` | Public in 1.0 |
-| `runtime` | `status` | `project.read` | Public in 1.0 |
-| `runtime` | `start`, `stop`, `pause`, `resume`, `step` | `runtime.control` | Public in 1.0 |
-| `editor` | `navigate`, `select` | `project.read` | Public in 1.0 |
-| reserved | none | `input.inject` | No public 1.0 service yet |
-| reserved | none | `asset.import` | No public 1.0 service yet |
-| reserved | none | `screenshot.capture` | No public 1.0 service yet |
-| reserved | none | `storage.secure` | No public Studio service yet |
+| `workspace` | `list`, `activate` | `project.read` | 1.0 |
+| `workspace` | `open`, `reload`, `close` | `project.manage` | 1.0 |
+| `project` | `describe`, `snapshot`, `getObject`, `getSchema` | `project.read` | 1.0; schema expanded in 1.1 |
+| `project` | `applyEdits`, `save`, `undo`, `redo` | `project.write` | 1.0 |
+| `build` | `check`, `run` | `build.execute` | 1.0 |
+| `runtime` | `status` | `project.read` | 1.0 |
+| `runtime` | `start`, `stop`, `pause`, `resume`, `step` | `runtime.control` | 1.0 |
+| `editor` | `navigate`, `select` | `project.read` | 1.0 |
+| `storage` | `get`, `set`, `store`, `delete`, `keys` | `storage.secure` | 1.1 |
+| `input` | `inject` | `input.inject` | 1.1 |
+| `screenshot` | `capture`, `readArtifact`, `deleteArtifact` | `screenshot.capture` | 1.1 |
+| `asset` | `selectSource`, `import` | `asset.import` | 1.1 |
 
 A manifest declaration is necessary but does not bypass user authorization.
 Permissions are scoped to the workspace resolved from the project or URI.
@@ -165,6 +168,42 @@ or uninstall invalidates outstanding permission prompts.
 Permission prompts are serialized globally. Workspace scope identifiers reject
 control characters and excessive lengths before they are used as authorization
 keys or displayed to the user.
+
+## Secure storage
+
+`storage.secure` is implemented in the Electron main process. Values are
+encrypted with Electron `safeStorage` and stored under a namespace containing
+both the extension ID and verified publisher fingerprint. A package signed by a
+different publisher cannot read the previous publisher's values. Signed
+packages persist values across Studio restarts. Unsigned Developer Mode
+packages receive session-only secure storage.
+
+Logical keys and storage sizes are bounded. The backing file is written through
+a temporary file, file `fsync`, atomic rename, and directory sync. A malformed
+backing file fails closed with `SECURE_STORAGE_CORRUPT`. The preload convenience
+API is `host.secrets.get/store/delete/keys`; typed `storage` requests expose the
+same boundary.
+
+## Input, screenshots, and assets
+
+`input.inject` accepts bounded pointer, key, and text event sequences for the
+Studio UI or a running project runtime. Coordinates must remain inside the
+Studio content bounds. Event count, cumulative delay, text size, cancellation,
+and per-extension request rates are enforced before or during delivery.
+
+`screenshot.capture` captures only the current Studio window, never arbitrary
+system displays. It produces a short-lived extension-scoped PNG or JPEG
+artifact. Extensions read artifacts in bounded base64 chunks and can delete
+them explicitly. Dimensions, encoded size, aggregate artifact memory, TTL,
+ownership, and request rate are enforced.
+
+`asset.selectSource` always presents a native user file picker. It returns a
+short-lived, extension-scoped token bound to the selected file's size and
+SHA-256 digest; `asset.import` never accepts an arbitrary source path or URL.
+Import rejects symlinks and destination traversal, stages and flushes the file,
+optionally replaces an existing project file, and can apply project edits in
+the same operation. Failure compensates both the file move and the project undo
+transaction. Incomplete compensation returns `ASSET_ROLLBACK_FAILED`.
 
 Before a sandbox starts, Studio re-verifies signed package contents and binds
 the host to the verified publisher fingerprint and signed file digests. Every
@@ -202,12 +241,12 @@ discard the partial snapshot and restart. The snapshot hash allows the caller
 to verify a reconstructed snapshot.
 
 `project.getObject` returns an object's type and JSON value. `project.getSchema`
-returns the available object type names and their properties. Schema property
-records state the serialized type name, whether a value is required, and
-whether it is read-only. Project-imported object types are included. A property
-whose optionality depends on a concrete instance is conservatively marked
-`required` and `conditionallyRequired`. Schema strings are identifiers, not JavaScript
-constructors or Studio class references.
+returns available object types and their JSON Schema descriptions. API 1.1
+includes `schemaVersion`, a deterministic `schemaHash`, dynamic types, enum
+values, nested classes, read-only properties, conditional-required metadata,
+and `additionalProperties: false` where the Studio model is closed.
+Project-imported object types are included. Schema strings are identifiers, not
+JavaScript constructors or Studio class references.
 
 ## Editing and transactions
 
@@ -221,7 +260,7 @@ constructors or Studio class references.
   optional zero-based index.
 
 Structured Object, Array, and StringArray updates and cross-collection moves
-are intentionally rejected in 1.0. Creating an object still uses Studio's
+remain intentionally rejected in 1.1. Creating an object still uses Studio's
 schema-aware serializer.
 
 The complete edit list executes as one labelled transaction and produces one
@@ -299,11 +338,11 @@ unsubscribe();
 ```
 
 The public event DTOs cover workspace changes, active projects, project changes
-and saves, completed builds, runtime state, and editor selection. Studio 1.0
-publishes `workspace.changed`; other event variants are reserved until their
-emitters are integrated. Extensions must still refresh authoritative state with
-request methods. Manifest activation events select when an extension starts and
-are separate from host data events.
+and saves, completed builds, runtime state, and editor selection. Studio
+currently publishes `workspace.changed`; other event variants are reserved
+until their emitters are integrated. Extensions must still refresh authoritative
+state with request methods. Manifest activation events select when an extension
+starts and are separate from host data events.
 
 ## Lifecycle and cleanup
 
@@ -312,7 +351,7 @@ the application process. The sandbox host then imports the `browser` module and
 awaits `activate(host)`. A load timeout or activation rejection tears down the
 host and reports an activation error.
 
-Sandbox deactivation is host-owned in 1.0. Shutdown, replacement, reload, and
+Sandbox deactivation is host-owned. Shutdown, replacement, reload, and
 uninstall call the optional module `deactivate(reason)` hook and wait up to
 three seconds. Disposal then aborts outstanding service dispatch, removes IPC
 listeners, destroys the isolated browser, and unregisters its protocol handler.
@@ -352,23 +391,37 @@ not already short, safe directory names, including scoped IDs such as
 extensions root. An ID never creates nested installation directories.
 
 Archive extraction and replacement transactions use
-`<extensions>/cache/.staging`. An update backup remains uncommitted until the
-new package receives its activation acknowledgement. On startup, Studio always
-rolls an uncommitted backup back over its target; after acknowledgement the
-backup is atomically marked committed and can be removed without rollback.
-Fresh installs use equivalent pending and installed markers. Studio also
-removes abandoned incoming directories. Uninstall transactions restore an
-uncommitted `uninstall` directory and atomically mark it `removed` only after
-the uninstall acknowledgement. Filesystem cleanup errors are reported instead
-of being treated as successful deletion. Install, update, and uninstall
+`<extensions>/cache/.staging`. API 1.1 records each install, update, and
+uninstall in a checksummed durable journal with ordered states `prepared`,
+`incoming-verified`, `backup-moved`, `target-installed`, `committed`, and
+`rolled-back`. New package files and journal records are flushed before atomic
+directory exchange. Parent directories are synced on POSIX. Platforms that
+cannot sync directory handles expose a degraded-durability metric.
+
+On startup, committed transactions preserve their installed or removed result;
+uncommitted transactions restore the previous package or remove an incomplete
+fresh install. Recovery is idempotent, retains malformed journal evidence, and
+fails closed on conflicting transactions. Legacy marker recovery remains for
+transactions created by earlier Studio versions. Install, update, and uninstall
 operations for the same extension ID are serialized through one operation
 queue; a failed operation does not block the next queued operation.
 Before a retry starts, Studio resolves any staging state for that extension ID.
-Startup recovery groups all markers by target: a committed install/update marker
-preserves its target over stale rollback markers, while conflicting uncommitted
-transactions fail closed without deleting or selecting either candidate.
 If staging recovery reports any error, Studio skips the installed extension
 root for that startup so an uncommitted target cannot activate.
+
+Legacy cleanup is coordinated by extension object identity. Concurrent cleanup
+for one generation executes once, and completion from an older generation
+cannot delete a newer instance with the same extension ID.
+
+## Audit and metrics
+
+The main-process host writes local JSONL audit events for activation,
+deactivation, unexpected exits, permissions, service outcomes and duration,
+and integrity violations. Secret-, token-, authorization-, content-, and
+prompt-shaped detail fields are redacted; workspace scope is hashed. Logs are
+bounded and rotated locally and are not uploaded. In-memory metrics include
+counters, gauges, aggregate service durations, audit write failures, active
+hosts, and install durability degradation.
 
 Catalog ZIP metadata is authoritative. The statically inspected package ID,
 version, and V1-or-legacy classification must match the selected catalog entry
@@ -434,27 +487,35 @@ can load. In-place V1 replacement always requires the same publisher
 fingerprint; changing publishers, including replacing a signed package with an
 unsigned Developer Mode package, requires an explicit uninstall first.
 
-## Delivery boundaries and next iterations
+## Delivery boundary
 
-The V1 Studio foundation intentionally stops at a stable, capability-gated
-JavaScript boundary. The following items are planned follow-up increments and
-are not exposed as usable V1 services yet:
+The Studio foundation stops at this stable, capability-gated JavaScript
+boundary. The JavaScript AI Agent extension and MCP adapter are separate
+deliverables and must be implemented on top of these services after the Studio
+foundation PR is reviewed. API 1.1 does not embed an MCP server, model provider,
+prompt transport, or external credential store in Studio.
 
-1. Wire `storage.secure` to the main-process `ExtensionSecureStorage` primitive
-   through authenticated IPC, including migration, key rotation, and publisher
-   fingerprint binding tests.
-2. Add separately reviewed `input.inject`, `asset.import`, and
-   `screenshot.capture` services with explicit user prompts, rate limits,
-   payload quotas, and audit events.
-3. Replace logical staging markers with a durable journal whose rename and
-   directory-flush steps are fault-injection tested on Windows and POSIX.
-4. Expand schema metadata for dynamic/conditionally required properties and
-   structured values, then add compatibility fixtures for imported project
-   classes.
-5. Make legacy loader uninstall/reload hooks idempotent and add single-flight
-   lifecycle tests for extensions that fail during cleanup.
-6. Add host observability (structured activation, permission, build, and
-   integrity events) and release metrics without exposing renderer internals.
+## Verification
 
-The JavaScript AI Agent/MCP adapter must be implemented on top of these stable
-services in a separate change set after the Studio foundation PR is reviewed.
+The deterministic Node suite runs type checking plus manifest, permission,
+sandbox IPC, installation security, transaction, interaction, secure storage,
+schema, audit, and recovery tests:
+
+```bash
+npm ci --ignore-scripts
+npm run test:extension-platform
+```
+
+The real Electron smoke fixture builds Studio, starts an actual sandboxed
+`BrowserWindow`, loads an unsigned Developer Mode extension, exercises preload
+IPC, secure-storage convenience methods, native `sendInputEvent` and
+`capturePage`, and the deterministic asset-selection handler before
+deactivating the host:
+
+```bash
+npm ci
+xvfb-run --auto-servernum npm run test:extension-platform:e2e
+```
+
+GitHub Actions runs the Node suite on Ubuntu and Windows and the Electron smoke
+fixture under Xvfb on Ubuntu.

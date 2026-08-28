@@ -1,0 +1,18 @@
+{
+    "name": "com.example.extension-platform-smoke",
+    "version": "1.0.0",
+    "displayName": "Extension Platform Smoke Test",
+    "author": "EEZ Studio Tests",
+    "eez-studio": {
+        "apiVersion": "1.1",
+        "host": "sandbox",
+        "browser": "extension.js",
+        "activationEvents": ["onStartup"],
+        "capabilities": [
+            "storage.secure",
+            "input.inject",
+            "screenshot.capture",
+            "asset.import"
+        ]
+    }
+}

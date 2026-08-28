@@ -11,7 +11,9 @@ import {
     verifyExtensionPackageSignature
 } from "../extensions-v1/package-signature";
 import {
+    advanceExtensionInstallJournal,
     durableRename,
+    hashExtensionDirectory,
     listExtensionInstallJournals,
     removeExtensionInstallJournal
 } from "./extension-install-journal";
@@ -248,6 +250,8 @@ export async function recoverExtensionStaging(
             recoveryErrors.push(wrapped);
         }
     });
+    const committedInstalledTargets = new Set<string>();
+    const committedRemovedTargets = new Set<string>();
     const activeJournalByExtension = new Map<string, string>();
     const conflictingJournalExtensions = new Set<string>();
     for (const journal of journals) {
@@ -303,6 +307,16 @@ export async function recoverExtensionStaging(
                 throw error;
             }
         };
+        const assertOldDigest = async (candidatePath: string) => {
+            if (
+                journal.oldDigest != undefined &&
+                (await hashExtensionDirectory(candidatePath)) != journal.oldDigest
+            ) {
+                throw new Error(
+                    `Extension rollback digest mismatch: ${journal.extensionId}`
+                );
+            }
+        };
         try {
             const targetExists = await exists(targetPath);
             if (journal.state == "committed") {
@@ -315,9 +329,34 @@ export async function recoverExtensionStaging(
                 }
                 if (incomingPath) await removeDirectory(incomingPath);
                 if (backupPath) await removeDirectory(backupPath);
+                if (journal.operation == "uninstall") {
+                    committedRemovedTargets.add(targetFolderName);
+                } else {
+                    committedInstalledTargets.add(targetFolderName);
+                }
             } else if (journal.state == "rolled-back") {
+                const backupExists = await exists(backupPath);
+                if (journal.operation == "install") {
+                    if (targetExists) await removeDirectory(targetPath);
+                    if (backupPath) await removeDirectory(backupPath);
+                } else if (backupExists) {
+                    await assertOldDigest(backupPath!);
+                    if (targetExists) await removeDirectory(targetPath);
+                    await fs.promises.mkdir(path.dirname(targetPath), {
+                        recursive: true
+                    });
+                    await durableRename(backupPath!, targetPath);
+                } else if (journal.oldDigest != undefined) {
+                    if (!targetExists) {
+                        throw new Error(
+                            `Rolled-back extension target is missing: ${journal.extensionId}`
+                        );
+                    }
+                    await assertOldDigest(targetPath);
+                } else if (targetExists) {
+                    await removeDirectory(targetPath);
+                }
                 if (incomingPath) await removeDirectory(incomingPath);
-                if (backupPath) await removeDirectory(backupPath);
             } else if (journal.operation == "uninstall") {
                 // The old package is parked at backupRelativePath until the
                 // uninstall reaches committed. Restore it on interruption.
@@ -327,6 +366,11 @@ export async function recoverExtensionStaging(
                 } else if (backupPath) {
                     await removeDirectory(backupPath);
                 }
+                await advanceExtensionInstallJournal(
+                    root,
+                    journal.transactionId,
+                    "rolled-back"
+                );
                 if (incomingPath) await removeDirectory(incomingPath);
             } else if (journal.state == "target-installed") {
                 if (targetExists) await removeDirectory(targetPath);
@@ -334,6 +378,11 @@ export async function recoverExtensionStaging(
                     await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
                     await durableRename(backupPath, targetPath);
                 }
+                await advanceExtensionInstallJournal(
+                    root,
+                    journal.transactionId,
+                    "rolled-back"
+                );
                 if (incomingPath) await removeDirectory(incomingPath);
             } else {
                 // prepared/incoming-verified/backup-moved: restore an existing
@@ -344,12 +393,22 @@ export async function recoverExtensionStaging(
                 } else if (backupPath) {
                     await removeDirectory(backupPath);
                 }
+                await advanceExtensionInstallJournal(
+                    root,
+                    journal.transactionId,
+                    "rolled-back"
+                );
                 if (incomingPath) await removeDirectory(incomingPath);
             }
             await removeExtensionInstallJournal(root, journal.transactionId);
         } catch (error) {
             recoveryErrors.push(error);
         }
+    }
+    // Never reinterpret artifacts from an unreadable or partially recovered
+    // durable transaction as legacy markers. Keep them intact for a retry.
+    if (recoveryErrors.length > 0) {
+        throw new ExtensionStagingRecoveryError(recoveryErrors);
     }
     const entries = await fs.promises.readdir(stagingRoot, {
         withFileTypes: true
@@ -464,12 +523,14 @@ export async function recoverExtensionStaging(
         try {
             const targetPath = path.join(root, targetFolderName);
             const targetExists = await exists(targetPath);
-            const hasInstalledState = targetEntries.some(
-                entry => entry.kind == "committed" || entry.kind == "installed"
-            );
-            const hasRemovedState = targetEntries.some(
-                entry => entry.kind == "removed"
-            );
+            const hasInstalledState =
+                committedInstalledTargets.has(targetFolderName) ||
+                targetEntries.some(
+                    entry => entry.kind == "committed" || entry.kind == "installed"
+                );
+            const hasRemovedState =
+                committedRemovedTargets.has(targetFolderName) ||
+                targetEntries.some(entry => entry.kind == "removed");
             const removeWithTerminalStateLast = async () => {
                 const orderedEntries = [...targetEntries].sort((left, right) => {
                     const leftTerminal =

@@ -38,8 +38,8 @@ export interface ExtensionMetricsSnapshot {
     readonly totalDurationMs: Readonly<Record<string, number>>;
 }
 
-const MAX_LOG_BYTES = 10 * 1024 * 1024;
-const MAX_ROLLED_FILES = 10;
+export const EXTENSION_AUDIT_MAX_LOG_BYTES = 10 * 1024 * 1024;
+export const EXTENSION_AUDIT_MAX_ROLLED_FILES = 10;
 const SENSITIVE_KEY = /secret|token|password|authorization|cookie|content|prompt/i;
 
 function safeDetails(value: unknown, depth = 0): unknown {
@@ -138,10 +138,29 @@ export class ExtensionObservability {
                 throw error;
             }
         }
-        if (size + Buffer.byteLength(line, "utf8") > MAX_LOG_BYTES) {
-            for (let index = MAX_ROLLED_FILES - 1; index >= 1; index--) {
+        if (
+            size + Buffer.byteLength(line, "utf8") >
+            EXTENSION_AUDIT_MAX_LOG_BYTES
+        ) {
+            try {
+                await fs.promises.unlink(
+                    `${logPath}.${EXTENSION_AUDIT_MAX_ROLLED_FILES}`
+                );
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                    throw error;
+                }
+            }
+            for (
+                let index = EXTENSION_AUDIT_MAX_ROLLED_FILES - 1;
+                index >= 1;
+                index--
+            ) {
                 try {
-                    await fs.promises.rename(`${logPath}.${index}`, `${logPath}.${index + 1}`);
+                    await fs.promises.rename(
+                        `${logPath}.${index}`,
+                        `${logPath}.${index + 1}`
+                    );
                 } catch (error) {
                     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
                         throw error;

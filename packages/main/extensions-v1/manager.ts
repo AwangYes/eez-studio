@@ -696,6 +696,13 @@ export class ExtensionV1Manager {
                         `Sandbox extension exited unexpectedly: ${extension.id}`
                     );
                 }
+            },
+            event => {
+                this.observability.emit({
+                    ...event,
+                    extensionId: extension.id,
+                    publisherFingerprint: extension.publisherFingerprint
+                });
             }
         );
         this.failedHosts.delete(extension.id);

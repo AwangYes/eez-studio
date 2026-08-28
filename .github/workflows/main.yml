@@ -28,6 +28,28 @@ jobs:
             - name: Typecheck and test Extension Platform V1
               run: npm run test:extension-platform
 
+    extension-platform-electron-smoke:
+        name: Extension Platform Electron smoke
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Check out Git repository
+              uses: actions/checkout@v4
+
+            - name: Install Node.js and NPM
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+
+            - name: Install dependencies and Electron
+              run: |
+                  npm ci --ignore-scripts
+                  node node_modules/electron/install.js
+
+            - name: Run sandbox extension smoke test
+              run: xvfb-run --auto-servernum npm run test:extension-platform:e2e
+
     release:
         if: github.event_name == 'push'
         runs-on: ${{ matrix.os }}

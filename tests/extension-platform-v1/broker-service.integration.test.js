@@ -425,6 +425,7 @@ test("sandbox host owns lifecycle completion and denies ambient permissions", as
     );
 
     let dispatches = 0;
+    const lifecycleEvents = [];
     const host = new sandboxModule.SandboxExtensionHost(
         {
             id: "@example/sandbox",
@@ -435,7 +436,9 @@ test("sandbox host owns lifecycle completion and denies ambient permissions", as
         },
         async () => {
             dispatches++;
-        }
+        },
+        undefined,
+        event => lifecycleEvents.push(event)
     );
     await host.activate();
 
@@ -510,6 +513,10 @@ test("sandbox host owns lifecycle completion and denies ambient permissions", as
     assert.equal(extensionSession.permissionCheckHandler, null);
     assert.equal(extensionSession.displayMediaRequestHandler, null);
     assert.equal(extensionSession.listenerCount("will-download"), 0);
+    assert.equal(lifecycleEvents.length, 1);
+    assert.equal(lifecycleEvents[0].type, "host.deactivation.completed");
+    assert.equal(lifecycleEvents[0].resultCode, "shutdown");
+    assert.match(lifecycleEvents[0].instanceId, /^[0-9a-f]{48}$/);
 
     let integrityExits = 0;
     const integrityHost = new sandboxModule.SandboxExtensionHost(
@@ -523,7 +530,8 @@ test("sandbox host owns lifecycle completion and denies ambient permissions", as
         async () => undefined,
         () => {
             integrityExits++;
-        }
+        },
+        event => lifecycleEvents.push(event)
     );
     await integrityHost.activate();
     const integritySession = sessions[1];
@@ -544,6 +552,25 @@ test("sandbox host owns lifecycle completion and denies ambient permissions", as
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(integrityExits, 1);
     assert.equal(integritySession.protocolRemoved, true);
+    assert.deepEqual(
+        lifecycleEvents.slice(1).map(event => ({
+            type: event.type,
+            resultCode: event.resultCode,
+            details: event.details
+        })),
+        [
+            {
+                type: "integrity.violation",
+                resultCode: "DIGEST_MISMATCH",
+                details: { path: "dist/entry.js" }
+            },
+            {
+                type: "host.deactivation.completed",
+                resultCode: "integrity-error",
+                details: undefined
+            }
+        ]
+    );
 
     let unexpectedExits = 0;
     const crashedHost = new sandboxModule.SandboxExtensionHost(
@@ -586,6 +613,7 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
     const outsiderWebContents = {};
     const extensionMap = new Map();
     const events = [];
+    const auditEvents = [];
     const diskPathIds = [];
     const revokedIds = [];
     const reloadIds = [];
@@ -618,8 +646,9 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
     });
 
     class FakeSandboxExtensionHost {
-        constructor(options) {
+        constructor(options, _dispatch, _onUnexpectedExit, onLifecycleEvent) {
             this.id = options.id;
+            this.onLifecycleEvent = onLifecycleEvent;
         }
 
         async activate() {
@@ -632,6 +661,20 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
 
         async deactivate(reason) {
             events.push(`deactivate:${this.id}:${reason}`);
+            this.onLifecycleEvent?.({
+                type: "host.deactivation.completed",
+                instanceId: `instance:${this.id}`,
+                resultCode: reason
+            });
+        }
+
+        reportIntegrityViolation() {
+            this.onLifecycleEvent?.({
+                type: "integrity.violation",
+                instanceId: `instance:${this.id}`,
+                resultCode: "DIGEST_MISMATCH",
+                details: { path: "dist/entry.js" }
+            });
         }
 
         sendEvent(event) {
@@ -743,7 +786,7 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
             },
             "main/extensions-v1/observability": {
                 ExtensionObservability: class {
-                    emit() {}
+                    emit(event) { auditEvents.push(event); }
                     setGauge() {}
                     snapshot() { return {}; }
                     async flush() {}
@@ -815,6 +858,16 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
         assert.equal(revokedIds.includes("installed.remove"), true);
         assert.equal(
             events.includes("deactivate:installed.remove:uninstall"),
+            true
+        );
+        assert.equal(
+            auditEvents.some(
+                event =>
+                    event.type === "host.deactivation.completed" &&
+                    event.extensionId === "installed.remove" &&
+                    event.instanceId === "instance:installed.remove" &&
+                    event.resultCode === "uninstall"
+            ),
             true
         );
         assert.equal(
@@ -906,6 +959,18 @@ test("sandbox manager reconciles Home READY snapshots against disk", async () =>
         await activationReconciliation;
         assert.equal(
             events.includes("event:activation.wait:command:run"),
+            true
+        );
+        manager.hosts.get("activation.wait").reportIntegrityViolation();
+        assert.equal(
+            auditEvents.some(
+                event =>
+                    event.type === "integrity.violation" &&
+                    event.extensionId === "activation.wait" &&
+                    event.instanceId === "instance:activation.wait" &&
+                    event.resultCode === "DIGEST_MISMATCH" &&
+                    event.details.path === "dist/entry.js"
+            ),
             true
         );
 

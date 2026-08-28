@@ -53,12 +53,8 @@ import {
 } from "eez-studio-shared/extensions/extension-lifecycle";
 import { ExtensionOperationQueue } from "eez-studio-shared/extensions/extension-operation-queue";
 import {
-    advanceExtensionInstallJournal,
-    beginExtensionInstallJournal,
-    durableRename,
-    hashExtensionDirectory,
-    removeExtensionInstallJournal,
-    syncExtensionTree
+    runDurableExtensionInstall,
+    runDurableExtensionUninstall
 } from "eez-studio-shared/extensions/extension-install-journal";
 
 import {
@@ -698,155 +694,80 @@ async function finishImportExtensionFromTempFolder({
             }
         }
         const journalTransactionId = guid();
-        const relativePath = (value: string) => path.relative(extensionsFolderPath, value);
-        let journal;
         try {
-            const oldDigest =
-                existingExtension && (await fileExists(extensionFolderPath))
-                    ? await hashExtensionDirectory(extensionFolderPath)
-                    : undefined;
-            const newDigest = await hashExtensionDirectory(tmpExtensionFolderPath);
-            await syncExtensionTree(tmpExtensionFolderPath);
-            journal = await beginExtensionInstallJournal(extensionsFolderPath, {
+            return await runDurableExtensionInstall({
+                root: extensionsFolderPath,
                 transactionId: journalTransactionId,
                 extensionId: extension.id,
                 operation: existingExtension ? "update" : "install",
-                targetRelativePath: relativePath(extensionFolderPath),
-                incomingRelativePath: relativePath(tmpExtensionFolderPath),
-                backupRelativePath: relativePath(backupFolderPath),
-                oldDigest,
-                newDigest,
-                publisherFingerprint: extension.publisherFingerprint
+                targetPath: extensionFolderPath,
+                incomingPath: tmpExtensionFolderPath,
+                backupPath: backupFolderPath,
+                committedBackupPath: committedFolderPath,
+                pendingInstallPath,
+                installedMarkerPath,
+                publisherFingerprint: extension.publisherFingerprint,
+                beforeTargetSwap: async () => {
+                    if (existingExtension) {
+                        await deactivateExtension(existingExtension, "replace");
+                        action(() => extensions.delete(existingExtension.id))();
+                    }
+                },
+                commit: async () => {
+                    const reloadedExtension = await loadExtension(
+                        extensionFolderPath,
+                        signaturePolicy
+                    );
+                    if (!reloadedExtension) {
+                        throw new Error(
+                            "Installed extension failed static validation"
+                        );
+                    }
+                    loadExtensionTasks.delete(extensionFolderPath);
+                    await notifyExtensionV1Changed(
+                        "install",
+                        reloadedExtension.id
+                    );
+                    return registerExtension(reloadedExtension);
+                },
+                rollback: async ({ previousTargetAvailable }) => {
+                    const failedExtension = extensions.get(extension.id);
+                    if (failedExtension) {
+                        await deactivateExtension(
+                            failedExtension,
+                            "activation-error"
+                        );
+                        action(() => extensions.delete(extension.id))();
+                    }
+                    if (previousTargetAvailable) {
+                        clearExtensionRequireCache(extensionFolderPath);
+                        const restored = await loadExtension(
+                            extensionFolderPath,
+                            signaturePolicy
+                        );
+                        if (!restored) {
+                            throw new Error(
+                                `Extension installation failed and backup restoration could not be registered: ${extension.id}`
+                            );
+                        }
+                        await notifyExtensionV1Changed("install", restored.id);
+                        await registerExtension(restored);
+                    } else {
+                        await notifyExtensionV1Changed(
+                            "uninstall",
+                            extension.id
+                        );
+                    }
+                },
+                removeDirectory: removeFolder,
+                reportCleanupError: (cleanupError, folderPath) =>
+                    console.error(
+                        `Failed to remove committed extension staging folder ${folderPath}`,
+                        cleanupError
+                    )
             });
         } catch (error) {
-            await removeFolder(tmpExtensionFolderPath).catch(cleanupError =>
-                console.error(
-                    `Failed to remove unjournaled extension staging folder for ${extension.id}`,
-                    cleanupError
-                )
-            );
-            throw error;
-        }
-        let backupCreated = false;
-        let pendingInstallCreated = false;
-        let replacementInstalled = false;
-        try {
-            await advanceExtensionInstallJournal(
-                extensionsFolderPath,
-                journal.transactionId,
-                "incoming-verified"
-            );
-            if (existingExtension) {
-                await deactivateExtension(existingExtension, "replace");
-                action(() => extensions.delete(existingExtension.id))();
-            }
-            if (await fileExists(extensionFolderPath)) {
-                await durableRename(extensionFolderPath, backupFolderPath);
-                backupCreated = true;
-            } else {
-                await fs.promises.mkdir(pendingInstallPath, {
-                    recursive: false
-                });
-                pendingInstallCreated = true;
-            }
-            await advanceExtensionInstallJournal(
-                extensionsFolderPath,
-                journal.transactionId,
-                "backup-moved"
-            );
-            await durableRename(tmpExtensionFolderPath, extensionFolderPath);
-            replacementInstalled = true;
-            await advanceExtensionInstallJournal(
-                extensionsFolderPath,
-                journal.transactionId,
-                "target-installed"
-            );
-
-            const reloadedExtension = await loadExtension(
-                extensionFolderPath,
-                signaturePolicy
-            );
-            if (!reloadedExtension) {
-                throw new Error("Installed extension failed static validation");
-            }
-            loadExtensionTasks.delete(extensionFolderPath);
-            await notifyExtensionV1Changed("install", reloadedExtension.id);
-            const registered = await registerExtension(reloadedExtension);
-            await advanceExtensionInstallJournal(
-                extensionsFolderPath,
-                journal.transactionId,
-                "committed"
-            );
-            if (backupCreated) {
-                await durableRename(backupFolderPath, committedFolderPath);
-                backupCreated = false;
-                try {
-                    await removeFolder(committedFolderPath);
-                } catch (cleanupError) {
-                    console.error(
-                        `Failed to remove committed backup for extension ${extension.id}`,
-                        cleanupError
-                    );
-                }
-            } else if (pendingInstallCreated) {
-                await durableRename(pendingInstallPath, installedMarkerPath);
-                pendingInstallCreated = false;
-                try {
-                    await removeFolder(installedMarkerPath);
-                } catch (cleanupError) {
-                    console.error(
-                        `Failed to remove install marker for extension ${extension.id}`,
-                        cleanupError
-                    );
-                }
-            }
-            await removeExtensionInstallJournal(
-                extensionsFolderPath,
-                journal.transactionId
-            );
-            return registered;
-        } catch (error) {
-            await advanceExtensionInstallJournal(
-                extensionsFolderPath,
-                journal.transactionId,
-                "rolled-back"
-            ).catch(() => undefined);
-            const failedExtension = extensions.get(extension.id);
-            if (failedExtension) {
-                await deactivateExtension(failedExtension, "activation-error");
-                action(() => extensions.delete(extension.id))();
-            }
-            if (replacementInstalled) {
-                await removeFolder(extensionFolderPath);
-            } else {
-                await removeFolder(tmpExtensionFolderPath);
-            }
-            if (backupCreated) {
-                await durableRename(backupFolderPath, extensionFolderPath);
-                clearExtensionRequireCache(extensionFolderPath);
-                const restored = await loadExtension(
-                    extensionFolderPath,
-                    signaturePolicy
-                );
-                if (restored) {
-                    await notifyExtensionV1Changed("install", restored.id);
-                    await registerExtension(restored);
-                } else {
-                    throw new Error(
-                        `Extension installation failed and backup restoration could not be registered: ${String(
-                            error
-                        )}`
-                    );
-                }
-            } else {
-                if (
-                    pendingInstallCreated &&
-                    (await fileExists(pendingInstallPath))
-                ) {
-                    await removeFolder(pendingInstallPath);
-                }
-                await notifyExtensionV1Changed("uninstall", extension.id);
-            }
+            await removeFolder(tmpExtensionFolderPath).catch(() => undefined);
             throw error;
         }
     }
@@ -1135,77 +1056,35 @@ async function uninstallExtensionUnlocked(extensionId: string) {
                 extensionId,
                 transactionId
             );
-            const journal = await beginExtensionInstallJournal(
-                extensionsFolderPath,
-                {
-                    transactionId,
-                    extensionId,
-                    operation: "uninstall",
-                    targetRelativePath: path.relative(
-                        extensionsFolderPath,
-                        extensionFolderPath
-                    ),
-                    backupRelativePath: path.relative(
-                        extensionsFolderPath,
-                        uninstallFolderPath
-                    ),
-                    oldDigest: (await fileExists(extensionFolderPath))
-                        ? await hashExtensionDirectory(extensionFolderPath)
-                        : undefined,
-                    publisherFingerprint: extension.publisherFingerprint
-                }
-            );
-            let moved = false;
-            try {
-                if (await fileExists(extensionFolderPath)) {
-                    await durableRename(extensionFolderPath, uninstallFolderPath);
-                    moved = true;
-                }
-                await advanceExtensionInstallJournal(
-                    extensionsFolderPath,
-                    journal.transactionId,
-                    "backup-moved"
-                );
-                await notifyExtensionV1Changed("uninstall", extensionId);
-                if (moved) {
-                    await durableRename(uninstallFolderPath, removedFolderPath);
-                    moved = false;
-                    try {
-                        await removeFolder(removedFolderPath);
-                    } catch (cleanupError) {
-                        console.error(
-                            `Failed to remove committed uninstall for extension ${extensionId}`,
-                            cleanupError
-                        );
+            await runDurableExtensionUninstall({
+                root: extensionsFolderPath,
+                transactionId,
+                extensionId,
+                targetPath: extensionFolderPath,
+                backupPath: uninstallFolderPath,
+                removedPath: removedFolderPath,
+                publisherFingerprint: extension.publisherFingerprint,
+                commit: () =>
+                    notifyExtensionV1Changed("uninstall", extensionId),
+                rollback: async () => {
+                    if (await fileExists(extensionFolderPath)) {
+                        const restored = await loadExtension(extensionFolderPath);
+                        if (restored) {
+                            await notifyExtensionV1Changed(
+                                "install",
+                                extensionId
+                            );
+                            await registerExtension(restored);
+                        }
                     }
-                }
-                await advanceExtensionInstallJournal(
-                    extensionsFolderPath,
-                    journal.transactionId,
-                    "committed"
-                );
-                await removeExtensionInstallJournal(
-                    extensionsFolderPath,
-                    journal.transactionId
-                );
-            } catch (error) {
-                await advanceExtensionInstallJournal(
-                    extensionsFolderPath,
-                    journal.transactionId,
-                    "rolled-back"
-                ).catch(() => undefined);
-                if (moved && (await fileExists(uninstallFolderPath))) {
-                    await durableRename(uninstallFolderPath, extensionFolderPath);
-                }
-                if (await fileExists(extensionFolderPath)) {
-                    const restored = await loadExtension(extensionFolderPath);
-                    if (restored) {
-                        await notifyExtensionV1Changed("install", extensionId);
-                        await registerExtension(restored);
-                    }
-                }
-                throw error;
-            }
+                },
+                removeDirectory: removeFolder,
+                reportCleanupError: cleanupError =>
+                    console.error(
+                        `Failed to remove committed uninstall for extension ${extensionId}`,
+                        cleanupError
+                    )
+            });
         } else if (extension.extensionType === "pext") {
             try {
                 await yarnUninstall(extension.name);

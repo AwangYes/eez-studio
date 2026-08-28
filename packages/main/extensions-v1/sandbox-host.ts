@@ -38,6 +38,22 @@ export type ExtensionServiceDispatcher = (
     request: ExtensionServiceRequest
 ) => Promise<unknown>;
 
+export type SandboxExtensionHostLifecycleEvent =
+    | {
+          readonly type: "host.deactivation.completed";
+          readonly instanceId: string;
+          readonly resultCode: string;
+      }
+    | {
+          readonly type: "integrity.violation";
+          readonly instanceId: string;
+          readonly resultCode:
+              | "UNVERIFIED_FILE"
+              | "FILE_MISSING"
+              | "DIGEST_MISMATCH";
+          readonly details: Readonly<{ path: string }>;
+      };
+
 interface SandboxRequestPayload {
     instanceId: string;
     requestId: number;
@@ -207,7 +223,10 @@ export class SandboxExtensionHost {
     constructor(
         private readonly descriptor: SandboxExtensionDescriptor,
         private readonly dispatch: ExtensionServiceDispatcher,
-        private readonly onUnexpectedExit?: () => void
+        private readonly onUnexpectedExit?: () => void,
+        private readonly onLifecycleEvent?: (
+            event: SandboxExtensionHostLifecycleEvent
+        ) => void
     ) {}
 
     async activate() {
@@ -317,7 +336,9 @@ export class SandboxExtensionHost {
             const expectedDigest = this.runtimeIntegrity.get(requestedPath);
             if (!expectedDigest) {
                 this.invalidateIntegrity(
-                    `Extension requested an unverified file: ${requestedPath}`
+                    "UNVERIFIED_FILE",
+                    `Extension requested an unverified file: ${requestedPath}`,
+                    requestedPath
                 );
                 return new Response("Extension package integrity changed", {
                     status: 409
@@ -328,7 +349,9 @@ export class SandboxExtensionHost {
                 content = await fs.promises.readFile(realFilePath);
             } catch {
                 this.invalidateIntegrity(
-                    `Extension file disappeared: ${requestedPath}`
+                    "FILE_MISSING",
+                    `Extension file disappeared: ${requestedPath}`,
+                    requestedPath
                 );
                 return new Response("Extension package integrity changed", {
                     status: 409
@@ -340,7 +363,9 @@ export class SandboxExtensionHost {
                 .digest("hex");
             if (actualDigest !== expectedDigest) {
                 this.invalidateIntegrity(
-                    `Extension file integrity check failed: ${requestedPath}`
+                    "DIGEST_MISMATCH",
+                    `Extension file integrity check failed: ${requestedPath}`,
+                    requestedPath
                 );
                 return new Response("Extension package integrity changed", {
                     status: 409
@@ -550,12 +575,22 @@ export class SandboxExtensionHost {
         }
     }
 
-    private invalidateIntegrity(message: string) {
+    private invalidateIntegrity(
+        resultCode: "UNVERIFIED_FILE" | "FILE_MISSING" | "DIGEST_MISMATCH",
+        message: string,
+        requestedPath: string
+    ) {
         if (this.integrityInvalidated || this.deactivated) {
             return;
         }
         this.integrityInvalidated = true;
         console.error(`${message}; terminating ${this.descriptor.id}`);
+        this.emitLifecycleEvent({
+            type: "integrity.violation",
+            instanceId: this.instanceId,
+            resultCode,
+            details: { path: requestedPath }
+        });
         void this.deactivate("integrity-error")
             .catch(error => {
                 console.error(
@@ -621,6 +656,22 @@ export class SandboxExtensionHost {
                 await extensionSession.protocol.unhandle(EXTENSION_SCHEME);
                 this.protocolRegistered = false;
             }
+        }
+        this.emitLifecycleEvent({
+            type: "host.deactivation.completed",
+            instanceId: this.instanceId,
+            resultCode: reason
+        });
+    }
+
+    private emitLifecycleEvent(event: SandboxExtensionHostLifecycleEvent) {
+        try {
+            this.onLifecycleEvent?.(event);
+        } catch (error) {
+            console.error(
+                `Failed to report sandbox lifecycle event for ${this.descriptor.id}`,
+                error
+            );
         }
     }
 

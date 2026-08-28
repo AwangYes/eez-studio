@@ -14,8 +14,8 @@ interface StoredSecrets {
     readonly values: Record<string, string>;
 }
 
-const MAX_KEYS_PER_EXTENSION = 256;
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+export const SECURE_STORAGE_MAX_KEYS_PER_EXTENSION = 256;
+export const SECURE_STORAGE_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
 function atomicWrite(filePath: string, contents: string) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -112,7 +112,10 @@ export class FileSecureStorageBackend implements SecureStorageBackend {
         const next = { ...this.values, [key]: value };
         const document: StoredSecrets = { version: 1, values: next };
         const serialized = JSON.stringify(document);
-        if (Buffer.byteLength(serialized, "utf8") > MAX_TOTAL_BYTES) {
+        if (
+            Buffer.byteLength(serialized, "utf8") >
+            SECURE_STORAGE_MAX_TOTAL_BYTES
+        ) {
             throw new ExtensionV1Error(
                 "SECURE_STORAGE_QUOTA_EXCEEDED",
                 "Extension secure storage quota exceeded"
@@ -160,17 +163,23 @@ function requireOnly(record: Record<string, unknown>, allowed: readonly string[]
     }
 }
 
+function createSessionBackend(): SecureStorageBackend {
+    const values = new Map<string, string>();
+    return {
+        get: key => values.get(key),
+        set: (key, value) => values.set(key, value),
+        delete: key => void values.delete(key),
+        keys: () => Array.from(values.keys())
+    };
+}
+
 export class ExtensionSecureStorageService {
-    private readonly persistentBackend = new FileSecureStorageBackend();
-    private readonly sessionBackend: SecureStorageBackend = (() => {
-        const values = new Map<string, string>();
-        return {
-            get: key => values.get(key),
-            set: (key, value) => values.set(key, value),
-            delete: key => void values.delete(key),
-            keys: () => Array.from(values.keys())
-        };
-    })();
+    constructor(
+        private readonly persistentBackend: SecureStorageBackend = new FileSecureStorageBackend(),
+        private readonly sessionBackend: SecureStorageBackend = createSessionBackend(),
+        private readonly createStorage: typeof createElectronExtensionSecureStorage =
+            createElectronExtensionSecureStorage
+    ) {}
 
     dispatch(
         extensionId: string,
@@ -185,7 +194,7 @@ export class ExtensionSecureStorageService {
                 .createHash("sha256")
                 .update(`developer-unsigned:${extensionId}`, "utf8")
                 .digest("hex");
-        const storage = createElectronExtensionSecureStorage(
+        const storage = this.createStorage(
             extensionId,
             identity,
             signed ? this.persistentBackend : this.sessionBackend
@@ -207,7 +216,10 @@ export class ExtensionSecureStorageService {
                 throw new ExtensionV1Error("INVALID_ARGUMENT", "value must be a string");
             }
             const keys = storage.keys();
-            if (!keys.includes(record.key) && keys.length >= MAX_KEYS_PER_EXTENSION) {
+            if (
+                !keys.includes(record.key) &&
+                keys.length >= SECURE_STORAGE_MAX_KEYS_PER_EXTENSION
+            ) {
                 throw new ExtensionV1Error(
                     "SECURE_STORAGE_QUOTA_EXCEEDED",
                     "Extension secure storage key limit exceeded"
