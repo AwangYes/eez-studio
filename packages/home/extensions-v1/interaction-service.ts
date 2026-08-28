@@ -68,6 +68,18 @@ async function syncFile(filePath: string) {
     const handle = await fs.promises.open(filePath, "r");
     try {
         await handle.sync();
+    } catch (error) {
+        // Windows does not guarantee fsync support for every filesystem
+        // provider (for example hosted CI volumes). The file write and atomic
+        // rename remain valid; report only errors that indicate a real I/O
+        // failure while allowing the documented degraded-durability mode.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (
+            process.platform != "win32" ||
+            (code != "EPERM" && code != "EINVAL" && code != "ENOTSUP")
+        ) {
+            throw error;
+        }
     } finally {
         await handle.close();
     }
