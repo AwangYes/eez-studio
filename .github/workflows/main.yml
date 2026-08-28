@@ -25,6 +25,9 @@ jobs:
             - name: Install dependencies
               run: npm ci --ignore-scripts
 
+            - name: Build TypeScript sources
+              run: npm run build-src
+
             - name: Typecheck and test Extension Platform V1
               run: npm run test:extension-platform
 
@@ -47,8 +50,11 @@ jobs:
                   npm ci --ignore-scripts
                   node node_modules/electron/install.js
 
-            - name: Run sandbox extension smoke test
-              run: xvfb-run --auto-servernum npm run test:extension-platform:e2e
+            - name: Build TypeScript sources
+              run: npm run build-src
+
+            - name: Launch Electron sandbox smoke test
+              run: xvfb-run --auto-servernum npx electron --no-sandbox tests/extension-platform-v1/electron-smoke-main.js
 
     release:
         if: github.event_name == 'push'

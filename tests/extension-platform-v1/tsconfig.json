@@ -26,6 +26,9 @@
             ],
             "project-editor/store": [
                 "./project-store-types.d.ts"
+            ],
+            "project-editor/core/object": [
+                "./schema-object-types.d.ts"
             ]
         },
         "typeRoots": ["../../node_modules/@types"],
