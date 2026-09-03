@@ -1212,16 +1212,25 @@ const ArrayElementProperties = observer(
                     </div>
                     {!collapsed && (
                         <div className="EezStudio_ArrayElementProperty_Body">
-                            {getClassInfo(this.props.object).properties.map(
-                                propertyInfo => (
-                                    <ArrayElementProperty
-                                        key={propertyInfo.name}
-                                        propertyInfo={propertyInfo}
-                                        object={this.props.object}
-                                        readOnly={this.props.readOnly}
-                                    />
+                            {getClassInfo(this.props.object).properties
+                                .filter(
+                                    propertyInfo =>
+                                        !this.props.propertyInfo
+                                            .elementVisibleProperties ||
+                                        this.props.propertyInfo.elementVisibleProperties.indexOf(
+                                            propertyInfo.name
+                                        ) != -1
                                 )
-                            )}
+                                .map(
+                                    propertyInfo => (
+                                        <ArrayElementProperty
+                                            key={propertyInfo.name}
+                                            propertyInfo={propertyInfo}
+                                            object={this.props.object}
+                                            readOnly={this.props.readOnly}
+                                        />
+                                    )
+                                )}
                         </div>
                     )}
                 </div>

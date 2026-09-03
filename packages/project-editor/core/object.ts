@@ -208,6 +208,9 @@ export interface PropertyInfo {
     propertyGridCollapsable?: boolean;
     propertyGridCollapsableDefaultPropertyName?: string;
     propertyGridCollapsableEnabled?: (object: IEezObject) => boolean;
+    // When set on an Array property, only the listed element properties
+    // are rendered inside the expanded array element in the property grid.
+    elementVisibleProperties?: string[];
     enumerable?:
         | boolean
         | ((object: IEezObject, propertyInfo: PropertyInfo) => boolean);

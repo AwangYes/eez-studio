@@ -22,6 +22,7 @@ export * from "./Lottie";
 export * from "./Keyboard";
 export * from "./Menu";
 export * from "./MessageBox";
+export * from "./MessageBoxButton";
 export * from "./Meter";
 export * from "./Panel";
 export * from "./QRCode";
