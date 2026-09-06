@@ -10,7 +10,8 @@ import {
 
 import { getChildOfObject, Message } from "project-editor/store";
 
-import { ProjectType } from "project-editor/project/project";
+import { findLvglStyle, ProjectType } from "project-editor/project/project";
+import { ProjectEditor } from "project-editor/project-editor-interface";
 
 import { specificGroup } from "project-editor/ui-components/PropertyGrid/groups";
 
@@ -20,6 +21,7 @@ import {
     LV_DIR_RIGHT,
     LV_DIR_TOP
 } from "project-editor/lvgl/lvgl-constants";
+import { getSelectorBuildCode } from "project-editor/lvgl/style-helper";
 
 import { LVGLWidget, LVGLTabWidget, LVGLContainerWidget } from "./internal";
 import {
@@ -381,10 +383,11 @@ export class LVGLTabviewWidget extends LVGLWidget {
 
     // In LVGL 9.x the tab bar buttons are real lv_button child objects
     // (unlike LVGL 8.x, where the tab bar is a button matrix with virtual
-    // "items"), so styles set on the Bar container's "Items" part have no
-    // effect on them. Re-apply those styles directly to each tab button,
-    // using the "Main" part, since that's the part LVGL actually looks at
-    // when rendering a button.
+    // "items"), so styles set on the Bar container's "Items" part - either
+    // a local override or one coming from a used/default project Style -
+    // have no effect on them. Re-apply those styles directly to each tab
+    // button, using the "Main" part, since that's the part LVGL actually
+    // looks at when rendering a button.
     applyTabBarItemsStyleToButtons(
         runtime: LVGLPageRuntime,
         tabviewObj: number
@@ -394,7 +397,19 @@ export class LVGLTabviewWidget extends LVGLWidget {
             return;
         }
 
-        if (!barContainer.localStyles.definition?.ITEMS) {
+        const lvglStyle = barContainer.styleTemplate
+            ? findLvglStyle(
+                  ProjectEditor.getProject(this),
+                  barContainer.styleTemplate
+              )
+            : undefined;
+
+        const hasSharedItemsStyle =
+            lvglStyle?.fullDefinition?.ITEMS != undefined;
+        const hasLocalItemsStyle =
+            barContainer.localStyles.definition?.ITEMS != undefined;
+
+        if (!hasSharedItemsStyle && !hasLocalItemsStyle) {
             return;
         }
 
@@ -408,7 +423,18 @@ export class LVGLTabviewWidget extends LVGLWidget {
         const numButtons = wasm._lv_obj_get_child_count(tabBarObj);
         for (let i = 0; i < numButtons; i++) {
             const buttonObj = wasm._lv_obj_get_child(tabBarObj, i);
-            if (buttonObj) {
+            if (!buttonObj) {
+                continue;
+            }
+
+            if (hasSharedItemsStyle) {
+                lvglStyle!.lvglAddStyleToObject(runtime, buttonObj, {
+                    from: "ITEMS",
+                    to: "MAIN"
+                });
+            }
+
+            if (hasLocalItemsStyle) {
                 barContainer.localStyles.lvglCreate(
                     runtime,
                     barContainer,
@@ -427,10 +453,22 @@ export class LVGLTabviewWidget extends LVGLWidget {
         }
 
         const barContainer = this.children[0];
-        if (
-            !(barContainer instanceof LVGLContainerWidget) ||
-            !barContainer.localStyles.definition?.ITEMS
-        ) {
+        if (!(barContainer instanceof LVGLContainerWidget)) {
+            return;
+        }
+
+        const lvglStyle = barContainer.styleTemplate
+            ? findLvglStyle(build.project, barContainer.styleTemplate)
+            : undefined;
+
+        const sharedItemsStates = lvglStyle?.fullDefinition?.ITEMS
+            ? Object.keys(lvglStyle.fullDefinition.ITEMS)
+            : [];
+
+        const hasLocalItemsStyle =
+            barContainer.localStyles.definition?.ITEMS != undefined;
+
+        if (sharedItemsStates.length == 0 && !hasLocalItemsStyle) {
             return;
         }
 
@@ -446,10 +484,24 @@ export class LVGLTabviewWidget extends LVGLWidget {
         build.line(
             `lv_obj_t *obj = lv_obj_get_child(tab_bar, tab_bar_button_i);`
         );
-        barContainer.localStyles.lvglBuild(build, {
-            from: "ITEMS",
-            to: "MAIN"
-        });
+
+        for (const state of sharedItemsStates) {
+            build.line(
+                `lv_obj_add_style(obj, ${build.getGetStyleFunctionName(
+                    lvglStyle!,
+                    "ITEMS",
+                    state
+                )}(), ${getSelectorBuildCode("MAIN", state)});`
+            );
+        }
+
+        if (hasLocalItemsStyle) {
+            barContainer.localStyles.lvglBuild(build, {
+                from: "ITEMS",
+                to: "MAIN"
+            });
+        }
+
         build.blockEnd(`}`);
         build.blockEnd("}");
     }

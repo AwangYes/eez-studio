@@ -649,12 +649,24 @@ export class LVGLStyle extends EezObject {
         });
     }
 
-    lvglAddStyleToObject(runtime: LVGLPageRuntime, obj: number) {
+    lvglAddStyleToObject(
+        runtime: LVGLPageRuntime,
+        obj: number,
+        partOverride?: { from: string; to: string }
+    ) {
         const lvglStyleObjects = runtime.styleObjMap.get(this) || {};
 
-        Object.keys(lvglStyleObjects).forEach(part => {
+        const parts = partOverride
+            ? [partOverride.from]
+            : Object.keys(lvglStyleObjects);
+
+        parts.forEach(part => {
+            if (!lvglStyleObjects[part]) {
+                return;
+            }
+            const selectorPart = partOverride ? partOverride.to : part;
             Object.keys(lvglStyleObjects[part]).forEach(state => {
-                const selectorCode = getSelectorCode(this, part, state);
+                const selectorCode = getSelectorCode(this, selectorPart, state);
                 runtime.wasm._lvglObjAddStyle(
                     obj,
                     lvglStyleObjects[part][state],

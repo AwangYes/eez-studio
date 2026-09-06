@@ -498,6 +498,7 @@ export const LVGLStylesDefinitionGroupProperties = observer(
                                     const object = objects[i];
 
                                     let lvglObj: number | undefined;
+                                    let effectivePart = part;
 
                                     if (
                                         object instanceof
@@ -511,13 +512,28 @@ export const LVGLStylesDefinitionGroupProperties = observer(
                                         lvglObj = runtime.getLvglObj(object);
                                     }
 
+                                    if (
+                                        object instanceof
+                                        ProjectEditor.LVGLContainerWidgetClass
+                                    ) {
+                                        const override =
+                                            object.getStylePreviewLvglObjOverride(
+                                                part
+                                            );
+                                        if (override) {
+                                            lvglObj = override.lvglObj;
+                                            effectivePart =
+                                                override.part as LVGLParts;
+                                        }
+                                    }
+
                                     return definedValue !== undefined
                                         ? definedValue
                                         : getStylePropDefaultValue(
                                               this.context.project,
                                               runtime,
                                               lvglObj,
-                                              part,
+                                              effectivePart,
                                               state,
                                               propertyInfo
                                           );

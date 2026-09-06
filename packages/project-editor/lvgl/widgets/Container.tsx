@@ -225,6 +225,50 @@ export class LVGLContainerWidget extends LVGLWidget {
         return super.getResizeHandlers();
     }
 
+    // On LVGL 9.x the Bar container's "Items" part is not rendered by the
+    // Bar object itself (see LVGLTabviewWidget.applyTabBarItemsStyleToButtons)
+    // but is instead re-applied, as "Main" part, to each tab button. So when
+    // the property grid wants to preview the current value of an unmodified
+    // "Items" part property, it must read it from one of those buttons
+    // (using the "Main" part), not from the Bar object itself.
+    getStylePreviewLvglObjOverride(
+        part: string
+    ): { lvglObj: number; part: string } | undefined {
+        if (part !== "ITEMS") {
+            return undefined;
+        }
+
+        const tabview = getTabview(this);
+        if (!tabview || tabview.children.indexOf(this) !== 0) {
+            return undefined;
+        }
+
+        const project = ProjectEditor.getProject(this);
+        if (!project.settings.general.lvglVersion.startsWith("9.")) {
+            return undefined;
+        }
+
+        if (!this._lvglObj) {
+            return undefined;
+        }
+
+        const page = ProjectEditor.getPage(this);
+        const runtime = page._lvglRuntime;
+        if (!runtime || !runtime.isMounted) {
+            return undefined;
+        }
+
+        const buttonObj = (runtime.wasm as any)._lv_obj_get_child(
+            this._lvglObj,
+            0
+        );
+        if (!buttonObj) {
+            return undefined;
+        }
+
+        return { lvglObj: buttonObj, part: "MAIN" };
+    }
+
     isStyleOverriden(propertyInfo: LVGLPropertyInfo) {
         if (this.localStyles.getPropertyValue(propertyInfo, "MAIN", "DEFAULT") != undefined) {
             return true;
