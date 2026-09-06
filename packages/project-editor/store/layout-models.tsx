@@ -394,7 +394,7 @@ export class LayoutModels extends AbstractLayoutModels {
         return [
             {
                 name: "rootEditor",
-                version: 115,
+                version: 116,
                 json: {
                     global: LayoutModels.GLOBAL_OPTIONS,
                     borders: this.borders,
@@ -408,7 +408,6 @@ export class LayoutModels extends AbstractLayoutModels {
                                     {
                                         type: "tabset",
                                         weight: 1,
-                                        enableClose: false,
                                         children: [
                                             LayoutModels.PAGES_TAB,
                                             LayoutModels.WIDGETS_TAB,
@@ -418,7 +417,6 @@ export class LayoutModels extends AbstractLayoutModels {
                                     {
                                         type: "tabset",
                                         weight: 1,
-                                        enableClose: false,
                                         children: [
                                             {
                                                 type: "tab",
@@ -432,7 +430,6 @@ export class LayoutModels extends AbstractLayoutModels {
                                     {
                                         type: "tabset",
                                         weight: 1,
-                                        enableClose: false,
                                         children: [
                                             {
                                                 type: "tab",
@@ -503,7 +500,6 @@ export class LayoutModels extends AbstractLayoutModels {
                                     {
                                         type: "tabset",
                                         weight: 1,
-                                        enableClose: false,
                                         children: [
                                             LayoutModels.EXTENSION_DEFINITIONS_TAB
                                         ]
@@ -511,13 +507,11 @@ export class LayoutModels extends AbstractLayoutModels {
                                     {
                                         type: "tabset",
                                         weight: 5,
-                                        enableClose: false,
                                         children: [LayoutModels.SCPI_TAB]
                                     },
                                     {
                                         type: "tabset",
                                         weight: 5,
-                                        enableClose: false,
                                         children: [
                                             LayoutModels.INSTRUMENT_COMMANDS_TAB
                                         ]
