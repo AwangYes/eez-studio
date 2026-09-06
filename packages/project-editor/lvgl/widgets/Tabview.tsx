@@ -27,6 +27,9 @@ import {
     makeLvglExpressionProperty
 } from "../expression-property";
 import type { LVGLCode } from "project-editor/lvgl/to-lvgl-code";
+import type { LVGLPageRuntime } from "project-editor/lvgl/page-runtime";
+import type { ICustomWidgetCreateParams } from "project-editor/features/page/page";
+import type { LVGLBuild } from "project-editor/lvgl/build";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -360,5 +363,94 @@ export class LVGLTabviewWidget extends LVGLWidget {
                 );
             }
         }
+    }
+
+    override lvglCreate(
+        runtime: LVGLPageRuntime,
+        parentObj: number,
+        customWidget?: ICustomWidgetCreateParams
+    ) {
+        const obj = super.lvglCreate(runtime, parentObj, customWidget);
+
+        if (runtime.isV9) {
+            this.applyTabBarItemsStyleToButtons(runtime, obj);
+        }
+
+        return obj;
+    }
+
+    // In LVGL 9.x the tab bar buttons are real lv_button child objects
+    // (unlike LVGL 8.x, where the tab bar is a button matrix with virtual
+    // "items"), so styles set on the Bar container's "Items" part have no
+    // effect on them. Re-apply those styles directly to each tab button,
+    // using the "Main" part, since that's the part LVGL actually looks at
+    // when rendering a button.
+    applyTabBarItemsStyleToButtons(
+        runtime: LVGLPageRuntime,
+        tabviewObj: number
+    ) {
+        const barContainer = this.children[0];
+        if (!(barContainer instanceof LVGLContainerWidget)) {
+            return;
+        }
+
+        if (!barContainer.localStyles.definition?.ITEMS) {
+            return;
+        }
+
+        const wasm = runtime.wasm as any;
+
+        const tabBarObj = wasm._lv_tabview_get_tab_bar(tabviewObj);
+        if (!tabBarObj) {
+            return;
+        }
+
+        const numButtons = wasm._lv_obj_get_child_count(tabBarObj);
+        for (let i = 0; i < numButtons; i++) {
+            const buttonObj = wasm._lv_obj_get_child(tabBarObj, i);
+            if (buttonObj) {
+                barContainer.localStyles.lvglCreate(
+                    runtime,
+                    barContainer,
+                    buttonObj,
+                    { from: "ITEMS", to: "MAIN" }
+                );
+            }
+        }
+    }
+
+    override lvglBuild(build: LVGLBuild) {
+        super.lvglBuild(build);
+
+        if (!build.isV9) {
+            return;
+        }
+
+        const barContainer = this.children[0];
+        if (
+            !(barContainer instanceof LVGLContainerWidget) ||
+            !barContainer.localStyles.definition?.ITEMS
+        ) {
+            return;
+        }
+
+        // See the comment in applyTabBarItemsStyleToButtons above.
+        build.blockStart("{");
+        build.line(`lv_obj_t *tab_bar = lv_tabview_get_tab_bar(obj);`);
+        build.line(
+            `uint32_t tab_bar_button_cnt = lv_obj_get_child_count(tab_bar);`
+        );
+        build.blockStart(
+            `for (uint32_t tab_bar_button_i = 0; tab_bar_button_i < tab_bar_button_cnt; tab_bar_button_i++) {`
+        );
+        build.line(
+            `lv_obj_t *obj = lv_obj_get_child(tab_bar, tab_bar_button_i);`
+        );
+        barContainer.localStyles.lvglBuild(build, {
+            from: "ITEMS",
+            to: "MAIN"
+        });
+        build.blockEnd(`}`);
+        build.blockEnd("}");
     }
 }

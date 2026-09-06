@@ -444,7 +444,8 @@ export class LVGLStylesDefinition extends EezObject {
     lvglCreate(
         runtime: LVGLPageRuntime,
         widget: LVGLWidget | Page,
-        obj: number
+        obj: number,
+        partOverride?: { from: string; to: string }
     ) {
         if (!this.definition) {
             return;
@@ -453,9 +454,15 @@ export class LVGLStylesDefinition extends EezObject {
         const projectStore = ProjectEditor.getProjectStore(widget);
         const lvglVersion = projectStore.project.settings.general.lvglVersion;
 
-        Object.keys(this.definition).forEach(part => {
+        const parts = partOverride ? [partOverride.from] : Object.keys(this.definition);
+
+        parts.forEach(part => {
+            if (!this.definition[part]) {
+                return;
+            }
+            const selectorPart = partOverride ? partOverride.to : part;
             Object.keys(this.definition[part]).forEach(state => {
-                const selectorCode = getSelectorCode(this, part, state);
+                const selectorCode = getSelectorCode(this, selectorPart, state);
                 Object.keys(this.definition[part][state]).forEach(
                     propertyName => {
                         const propertyInfo =
@@ -624,14 +631,20 @@ export class LVGLStylesDefinition extends EezObject {
         });
     }
 
-    lvglBuild(build: LVGLBuild) {
+    lvglBuild(build: LVGLBuild, partOverride?: { from: string; to: string }) {
         if (!this.definition) {
             return;
         }
 
-        Object.keys(this.definition).forEach(part => {
+        const parts = partOverride ? [partOverride.from] : Object.keys(this.definition);
+
+        parts.forEach(part => {
+            if (!this.definition[part]) {
+                return;
+            }
+            const selectorPart = partOverride ? partOverride.to : part;
             Object.keys(this.definition[part]).forEach(state => {
-                const selectorCode = getSelectorBuildCode(part, state);
+                const selectorCode = getSelectorBuildCode(selectorPart, state);
                 Object.keys(this.definition[part][state]).forEach(
                     propertyName => {
                         const propertyInfo =
