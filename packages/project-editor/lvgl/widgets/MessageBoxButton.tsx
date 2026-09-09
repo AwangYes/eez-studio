@@ -21,6 +21,7 @@ import { Message } from "project-editor/store";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import type { LVGLCode } from "project-editor/lvgl/to-lvgl-code";
 import type { IResizeHandler } from "project-editor/flow/flow-interfaces";
+import { AutoSize } from "project-editor/flow/component";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -85,6 +86,7 @@ export class LVGLMessageBoxButtonWidget extends LVGLWidget {
         ],
 
         defaultValue: {
+            type: 'LVGLMessageBoxButtonWidget',
             left: 0,
             top: 0,
             width: 80,
@@ -119,7 +121,9 @@ export class LVGLMessageBoxButtonWidget extends LVGLWidget {
             parts: ["MAIN"],
             defaultFlags:
                 "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_ON_FOCUS|SCROLL_WITH_ARROW|SNAPPABLE"
-        }
+        },
+
+        isMoveable: object => false
     });
 
     override makeEditable() {
@@ -130,6 +134,11 @@ export class LVGLMessageBoxButtonWidget extends LVGLWidget {
             closeButton: observable
         });
     }
+
+    override get autoSize(): AutoSize {
+        return "both";
+    }
+
 
     get parentWidget() {
         return getParent(getParent(this)) as LVGLWidget;
@@ -173,7 +182,7 @@ export class LVGLMessageBoxButtonWidget extends LVGLWidget {
 
     // size is determined by content and the MessageBox layout
     override getResizeHandlers(): IResizeHandler[] | undefined | false {
-        return false;
+        return [];
     }
 
     override toLVGLCode(code: LVGLCode) {        if (!this.messageBox) {
