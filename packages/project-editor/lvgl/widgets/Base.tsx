@@ -1646,7 +1646,25 @@ export class LVGLWidget extends Widget {
     }
 
     eventHandlersToLVGLCode(code: LVGLCode) {
-        let addEventAllCallback = code.lvglBuild ? code.lvglBuild.eventHandlers.get(this) : false;
+        const existingEventHandlers = code.lvglBuild
+            ? code.lvglBuild.eventHandlers.get(this)
+            : undefined;
+
+        // The general LV_EVENT_ALL callback (event_handler_cb_...) is only
+        // emitted (see build.ts) if there is at least one "other" (i.e. not
+        // CHECKED/UNCHECKED) event handler, or if the project has flow
+        // support (in which case CHECKED/UNCHECKED are handled inside it
+        // too). Registering LV_EVENT_ALL here for a widget that only has
+        // CHECKED/UNCHECKED handlers (and no flow support) would reference
+        // a function that is never declared.
+        let addEventAllCallback = existingEventHandlers
+            ? code.hasFlowSupport ||
+              existingEventHandlers.some(
+                  eventHandler =>
+                      eventHandler.eventName != "CHECKED" &&
+                      eventHandler.eventName != "UNCHECKED"
+              )
+            : false;
 
         if (this.checkedStateType == "expression") {
             code.addEventHandler("VALUE_CHANGED", (event, tick_value_change_obj) => {
