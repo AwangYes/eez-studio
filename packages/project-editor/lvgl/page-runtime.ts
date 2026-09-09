@@ -119,6 +119,10 @@ export abstract class LVGLPageRuntime {
         mapArray: Uint32Array;
         ctrlMapBuffer: number;
     }[];
+    msgboxBuffers: {
+        btnsBuffer: number;
+        btnsArray: Uint32Array;
+    }[];
     _isInsideUserWidget: number;
 
     constructor(public page: Page) {
@@ -159,6 +163,7 @@ export abstract class LVGLPageRuntime {
         this.stringLiterals = new Map();
         this.postCreateCallbacks = [];
         this.buttonMatrixBuffers = [];
+        this.msgboxBuffers = [];
         this._isInsideUserWidget = 0;
     }
 
@@ -689,6 +694,23 @@ export abstract class LVGLPageRuntime {
         });
     }
 
+    addMsgboxBuffers(btnsBuffer: number, btnsArray: Uint32Array) {
+        this.msgboxBuffers.push({
+            btnsBuffer,
+            btnsArray
+        });
+    }
+
+    freeAllMsgboxBuffers() {
+        for (const buffers of this.msgboxBuffers) {
+            buffers.btnsArray
+                .slice(0, -1)
+                .forEach(value => this.wasm._free(value));
+
+            this.wasm._free(buffers.btnsBuffer);
+        }
+    }
+
     freeAllButtonMatrixBuffers() {
         for (const buffers of this.buttonMatrixBuffers) {
             buffers.mapArray
@@ -817,6 +839,7 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
                         this.pointers = [];
 
                         this.freeAllButtonMatrixBuffers();
+                        this.freeAllMsgboxBuffers();
 
                         this.createStyles();
 
@@ -1793,6 +1816,7 @@ export class LVGLStylesEditorRuntime extends LVGLPageRuntime {
                     });
 
                     this.freeAllButtonMatrixBuffers();
+                    this.freeAllMsgboxBuffers();
 
                     this.selectedStyle;
                     this.project._store.uiStateStore.lvglState;
