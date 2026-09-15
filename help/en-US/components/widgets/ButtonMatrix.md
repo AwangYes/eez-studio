@@ -12,6 +12,11 @@ List of buttons. Each button has the following properties:
 
 -   New line: if enabled then this is not actual button, but it introduces line break in button matrix.
 -   Text: Label of the button
+-   Text type: Literal - String or Expression, using the existing type selector.
+    For example, `LVGL.LV_SYMBOL_OK + " OK"` displays a symbol and text with Flow.
+    Literal `LV_SYMBOL_OK` remains ordinary text, including in older projects.
+    Without Flow, use the existing Variable selector and return the symbol text
+    from the generated variable getter.
 -   Width: The buttons' width can be set relative to the other button in the same row. E.g. in a line with two buttons: btnA, width = 1 and btnB, width = 2, btnA will have 33 % width and btnB will have 66 % width.
 -   HIDDEN Makes a button hidden (hidden buttons still take up space in the layout, they are just not visible or clickable)
 -   NO_REPEAT Disable repeating when the button is long pressed
@@ -23,6 +28,20 @@ List of buttons. Each button has the following properties:
 -   RECOLOR Enable recoloring of button texts with #. E.g. "It's #ff0000 red#"
 -   CUSTOM_1 Custom free to use flag
 -   CUSTOM_2 Custom free to use flag
+
+Use New line for row boundaries. An expression result is a button label, not a
+row separator. An empty evaluated label displays a blank button and does not
+terminate the map. Width keeps the existing integer range of 1 through 7.
+
+The ButtonMatrix group of LVGL Actions provides Set Map and Get Selected Button.
+Set Map uses this same Buttons editor, including all widths, row boundaries and
+control flags. Text expressions are evaluated when the action executes. An empty
+Buttons list clears the map. The runtime copies the map and text and releases
+them when replaced or when the widget is deleted.
+
+Widget text bindings remain active after Set Map and can update the corresponding
+map entries on later ticks. Get Selected Button returns an index excluding New
+line entries, or 65535 when no button is selected.
 
 ## One check
 
