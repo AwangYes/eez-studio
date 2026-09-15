@@ -6,7 +6,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { spawnSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
-const executable = path.join(root, "dist/linux-unpacked/eezstudio");
+const executable = process.env.EEZ_PACKAGED_EXECUTABLE || path.join(root, "dist/linux-unpacked/eezstudio");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "eez-package-test-"));
 try {
     for (const mode of ["flow", "no-flow"]) {
@@ -26,7 +26,9 @@ try {
         ];
         const file = path.join(dir, "fixture.eez-project");
         fs.writeFileSync(file, JSON.stringify(fixture));
-        const result = spawnSync("xvfb-run", ["-a", executable, "--no-sandbox", "--user-data-dir=" + path.join(scratch, "profile"), "--build-project", file], {
+        const args = ["--no-sandbox", "--user-data-dir=" + path.join(scratch, "profile"), "--build-project", file];
+        const result = spawnSync(process.platform === "linux" ? "xvfb-run" : executable,
+            process.platform === "linux" ? ["-a", executable, ...args] : args, {
             encoding: "utf8", timeout: 120000,
             env: { ...process.env, XDG_CONFIG_HOME: path.join(scratch, "config"), XDG_DATA_HOME: path.join(scratch, "data"), XDG_CACHE_HOME: path.join(scratch, "cache") }
         });
