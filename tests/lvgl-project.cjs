@@ -30,13 +30,15 @@ exports.run = async () => {
     rawScreen.children.push(
         { ...LVGLTextareaWidget.classInfo.defaultValue, type: "LVGLTextareaWidget", identifier: "edit_key", text: "key_label", textType: "expression" },
         { ...LVGLLabelWidget.classInfo.defaultValue, type: "LVGLLabelWidget", identifier: "copied_label", text: "copied", textType: "expression" },
-        { ...LVGLLabelWidget.classInfo.defaultValue, type: "LVGLLabelWidget", identifier: "selected_label", text: "selected", textType: "expression" }
+        { ...LVGLLabelWidget.classInfo.defaultValue, type: "LVGLLabelWidget", identifier: "selected_label", text: "selected", textType: "expression" },
+        { ...LVGLLabelWidget.classInfo.defaultValue, type: "LVGLLabelWidget", identifier: "button_text_label", text: "button_text", textType: "expression" }
     );
     base.variables.globalVariables = [
         { name: "hint", type: "string", defaultValue: '"bound hint"', native: false },
         { name: "key_label", type: "string", defaultValue: '"bound key"', native: false },
         { name: "copied", type: "string", defaultValue: '""', native: false },
-        { name: "selected", type: "integer", defaultValue: "-1", native: false }
+        { name: "selected", type: "integer", defaultValue: "-1", native: false },
+        { name: "button_text", type: "string", defaultValue: '""', native: false }
     ];
     const action = base.userPages[0].components.find(c => c.type === "LVGLActionComponent");
     const mapAction = action.actions[0];
@@ -50,7 +52,9 @@ exports.run = async () => {
         set("textareaSetPlaceholderText", "text", "action placeholder"),
         { action: "textareaGetText", object: "input", objectType: "literal", result: "copied" },
         mapAction,
-        { action: "buttonMatrixGetSelectedButton", object: "keys", objectType: "literal", result: "selected" }
+        { action: "buttonMatrixGetSelectedButton", object: "keys", objectType: "literal", result: "selected" },
+        { action: "buttonMatrixGetButtonText", object: "keys", objectType: "literal", buttonID: 0, buttonIDType: "literal", result: "button_text" },
+        { action: "buttonMatrixGetButtonText", object: "keys", objectType: "literal", buttonID: "0 + 1", buttonIDType: "expression", result: "button_text" }
     ];
     const start = { objID: randomUUID(), type: "StartActionComponent", left: 400, top: 0, width: 40, height: 40 };
     base.userPages[0].components.push(start);
@@ -65,7 +69,7 @@ exports.run = async () => {
                 raw.userPages[0].components = raw.userPages[0].components.filter(c => c.type === "LVGLScreenWidget");
                 raw.userPages[0].connectionLines = [];
                 const screen = raw.userPages[0].components[0];
-                screen.children = screen.children.filter(c => !["edit_key", "copied_label", "selected_label"].includes(c.identifier));
+                screen.children = screen.children.filter(c => !["edit_key", "copied_label", "selected_label", "button_text_label"].includes(c.identifier));
                 Object.assign(screen.children.find(c => c.identifier === "dynamic_input"), { text: "", textType: "literal" });
                 raw.variables.globalVariables = raw.variables.globalVariables.slice(0, 2).map(v => ({ ...v, native: true }));
             }
@@ -111,6 +115,7 @@ exports.run = async () => {
                 const keyInput = children.find(c => c.identifier === "edit_key");
                 const copied = children.find(c => c.identifier === "copied_label");
                 const selected = children.find(c => c.identifier === "selected_label");
+                const buttonText = children.find(c => c.identifier === "button_text_label");
                 await until(() => input._lvglObj && matrix._lvglObj, runtime, "screen creation " + version);
                 const wasm = runtime.worker.wasm;
                 const label = widget => wasm.UTF8ToString(wasm._lv_label_get_text(widget._lvglObj));
@@ -119,8 +124,9 @@ exports.run = async () => {
                     wasm._lv_textarea_set_text(widget._lvglObj, ptr);
                     wasm._free(ptr);
                 };
-                await until(() => copied._lvglObj && label(copied) === "hello 世界", runtime, "eight actions " + version);
+                await until(() => copied._lvglObj && label(copied) === "hello 世界", runtime, "nine actions " + version);
                 assert.equal(label(selected), "65535");
+                assert.equal(label(buttonText), "\uf00d bound key");
                 assert.equal(wasm._lv_textarea_get_one_line(input._lvglObj), 1);
                 assert.equal(wasm._lv_textarea_get_password_mode(input._lvglObj), 1);
                 assert.equal(wasm.UTF8ToString(wasm._lv_textarea_get_password_bullet(input._lvglObj)), "*");
@@ -143,8 +149,9 @@ exports.run = async () => {
                 edit(input, "changed");
                 runtime.lgvlPageRuntime.lvglScreenTick();
                 assert.equal(label(copied), "hello 世界");
+                assert.equal(label(buttonText), "\uf00d bound key");
                 assert(!runtime.error, String(runtime.error));
-                console.log("PASS: Studio Run, eight compiled actions and live empty/non-empty bindings " + version);
+                console.log("PASS: Studio Run, nine compiled actions and live empty/non-empty bindings " + version);
             } finally {
                 await runtime.stopRuntime(false);
                 runInAction(() => { store.runtime = undefined; });

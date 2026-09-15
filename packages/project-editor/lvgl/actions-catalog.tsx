@@ -1268,6 +1268,38 @@ registerAction({
 });
 
 registerAction({
+    id: 73,
+    name: "buttonMatrixGetButtonText",
+    group: "ButtonMatrix",
+    properties: [
+        {
+            name: "object",
+            type: "widget:ButtonMatrix",
+            helpText: "The button matrix"
+        },
+        {
+            name: "buttonID",
+            type: "integer",
+            helpText: "0 based index of the button. (Not counting new lines)"
+        },
+        {
+            name: "result",
+            type: "string",
+            isAssignable: true,
+            helpText: "The variable where to store the button text"
+        }
+    ],
+    defaults: {},
+    label: ([object, buttonID, result]) => (
+        <>
+            {object} {buttonID} <RightArrow /> {result}
+        </>
+    ),
+    helpText:
+        "Get a copy of the button text. Returns an empty string for an invalid button index or 65535 (LVGL button NONE)"
+});
+
+registerAction({
     id: 50,
     name: "calendarSetTodayDate",
     group: "Calendar",

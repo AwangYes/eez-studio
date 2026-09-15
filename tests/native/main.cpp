@@ -65,6 +65,7 @@ int main() {
     assert(!strcmp(lv_textarea_get_password_bullet(objects.input), "*"));
     assert(!strcmp(lv_textarea_get_placeholder_text(objects.input), "action placeholder"));
     assert(eez::flow::getGlobalVariable(TEST_SELECTED_INDEX).getInt() == 65535);
+    assert(!strcmp(eez::flow::getGlobalVariable(TEST_BUTTON_TEXT_INDEX).getString(), LV_SYMBOL_CLOSE " bound key"));
     assert(!strcmp(BUTTON_TEXT(objects.keys, 0), "A"));
     lv_textarea_set_text(objects.input, "changed");
     assert(!strcmp(eez::flow::getGlobalVariable(TEST_COPIED_INDEX).getString(), "hello 世界"));
@@ -90,6 +91,7 @@ int main() {
         assert(!strcmp(BUTTON_TEXT(objects.keys, 1), LV_SYMBOL_OK " new"));
     }
 #ifdef TEST_FLOW
+    assert(!strcmp(eez::flow::getGlobalVariable(TEST_BUTTON_TEXT_INDEX).getString(), LV_SYMBOL_CLOSE " bound key"));
     eez::flow::stop();
     eez::flow::tick();
 #endif

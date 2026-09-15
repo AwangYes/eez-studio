@@ -22,6 +22,7 @@ assert.equal(names[64], "objGetDisplayY");
 assert.equal(names[65], "textareaGetText");
 assert.equal(names[71], "buttonMatrixGetSelectedButton");
 assert.equal(names[72], "buttonMatrixSetMap");
+assert.equal(names[73], "buttonMatrixGetButtonText");
 (async () => {
     for (const version of ["8.4.0", "9.2.2", "9.3.0", "9.4.0", "9.5.0"]) {
         const base = path.join(root, "packages/project-editor/flow/runtime/wasm/lvgl_runtime_v" + version);
@@ -38,5 +39,5 @@ assert.equal(names[72], "buttonMatrixSetMap");
         }
         assert.equal(wasm._eez_test_lvgl_actions, undefined, "Test code leaked into release");
     }
-    console.log("PASS: 73 catalog/engine action IDs and five updated runtime exports");
+    console.log("PASS: 74 catalog/engine action IDs and five updated runtime exports");
 })().catch(error => { console.error(error); process.exitCode = 1; });

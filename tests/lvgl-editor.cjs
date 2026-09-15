@@ -68,7 +68,7 @@ exports.run = async () => {
     assert.equal(reloaded.userPages[0].lvglScreenWidget.children[3].buttons[2].textType, "expression");
     assert.equal(reloaded.userPages[0].components.find(c => c.type === "LVGLActionComponent").actions[0].buttons[2].width, 2);
     const ids = actionDefinitions.filter(a => a.id >= 65).sort((a, b) => a.id - b.id);
-    assert.deepEqual(ids.map(a => a.id), [65, 66, 67, 68, 69, 70, 71, 72]);
+    assert.deepEqual(ids.map(a => a.id), [65, 66, 67, 68, 69, 70, 71, 72, 73]);
     assert.deepEqual(ids.slice(0, 6).map(a => a.group), Array(6).fill("Textarea"));
     assert.equal(ids[7].group, "ButtonMatrix");
     const { Assets } = require("project-editor/build/assets");

@@ -33,7 +33,7 @@ Use New line for row boundaries. An expression result is a button label, not a
 row separator. An empty evaluated label displays a blank button and does not
 terminate the map. Width keeps the existing integer range of 1 through 7.
 
-The ButtonMatrix group of LVGL Actions provides Set Map and Get Selected Button.
+The ButtonMatrix group of LVGL Actions provides Set Map, Get Selected Button and Get Button Text.
 Set Map uses this same Buttons editor, including all widths, row boundaries and
 control flags. Text expressions are evaluated when the action executes. An empty
 Buttons list clears the map. The runtime copies the map and text and releases
@@ -42,6 +42,15 @@ them when replaced or when the widget is deleted.
 Widget text bindings remain active after Set Map and can update the corresponding
 map entries on later ticks. Get Selected Button returns an index excluding New
 line entries, or 65535 when no button is selected.
+
+Get Button Text uses Object, Button ID and Store result into, following the
+existing action editors. Button ID accepts Literal - Integer or Expression.
+IDs start at 0 and exclude New line entries. The string result is a snapshot of
+the current label (including LVGL symbols); later text/map updates and widget
+deletion do not change it. An invalid ID, 65535 (NONE), or an empty map returns
+an empty string. An evaluated blank label created by Set Map returns its actual
+single-space text. Like the other new actions, this requires the matching
+framework and Studio runtime.
 
 ## One check
 
