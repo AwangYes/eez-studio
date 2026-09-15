@@ -32,6 +32,23 @@ xvfb-run -a npm run test:lvgl  # Linux, or npm run test:lvgl on a desktop
 The `LVGL validation` workflow builds and packages a directory artifact. It has
 read-only repository permissions and never creates a release.
 
+## Matching runtime sources
+
+- Framework implementation: [eez-framework PR #30](https://github.com/eez-open/eez-framework/pull/30), commit `f008987e22a844d8ed2eba741981f63f6776a275`.
+- Build tooling and reproducible engines: [studio-wasm-libs PR #1](https://github.com/eez-open/studio-wasm-libs/pull/1), commit `8e26785edd57d654267a95a6506069a5aa723a75`.
+
+Update the framework pin and regenerate before merging if the framework change
+is squash-merged. Consume the resulting amalgamation and all five engines as one
+set. Existing action IDs 0–64 are frozen in `lvgl-legacy-action-ids.json`; new
+actions require the matching dispatcher, not merely raw LVGL function exports.
+
+Set Map uses the widget's complete Buttons editor rather than a new map-resource
+or string-array UI. Its expressions are evaluated at action execution. Widget
+bindings keep their original map-entry indexes (including row markers): later
+ticks may overwrite matching entries; out-of-range or newline-targeting updates
+leave the map unchanged. Placeholder bindings follow the established same rule
+as Text bindings and do not detach when an action sets a value.
+
 The workflow exercises Electron on Linux, Windows and macOS. Linux packaging is
 followed by a five-version native generated-code matrix. For a local native run:
 
