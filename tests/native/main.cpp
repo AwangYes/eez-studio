@@ -77,18 +77,22 @@ int main() {
     tick_screen(0);
     assert(!strcmp(lv_textarea_get_placeholder_text(objects.translated_input), "translated placeholder"));
     assert(!strcmp(lv_textarea_get_placeholder_text(objects.dynamic_input), "bound hint"));
-    assert(!strcmp(BUTTON_TEXT(objects.keys, 1), "bound key"));
+    assert(!strcmp(BUTTON_TEXT(objects.bound_keys, 1), "bound key"));
     for (int i = 0; i < 200; i++) {
+#ifdef TEST_FLOW
+        assert(!strcmp(BUTTON_TEXT(objects.keys, 0), "A"));
+        assert(!strcmp(BUTTON_TEXT(objects.keys, 1), LV_SYMBOL_CLOSE " bound key"));
+#endif
         set_hint("");
         set_key("");
         tick_screen(0);
         assert(!strcmp(lv_textarea_get_placeholder_text(objects.dynamic_input), ""));
-        assert(!strcmp(BUTTON_TEXT(objects.keys, 1), " "));
+        assert(!strcmp(BUTTON_TEXT(objects.bound_keys, 1), " "));
         set_hint("new hint");
         set_key(LV_SYMBOL_OK " new");
         tick_screen(0);
         assert(!strcmp(lv_textarea_get_placeholder_text(objects.dynamic_input), "new hint"));
-        assert(!strcmp(BUTTON_TEXT(objects.keys, 1), LV_SYMBOL_OK " new"));
+        assert(!strcmp(BUTTON_TEXT(objects.bound_keys, 1), LV_SYMBOL_OK " new"));
     }
 #ifdef TEST_FLOW
     assert(!strcmp(eez::flow::getGlobalVariable(TEST_BUTTON_TEXT_INDEX).getString(), LV_SYMBOL_CLOSE " bound key"));
