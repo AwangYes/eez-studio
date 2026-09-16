@@ -39,8 +39,7 @@ control flags. Text expressions are evaluated when the action executes. An empty
 Buttons list clears the map. The runtime copies the map and text and releases
 them when replaced or when the widget is deleted.
 
-Widget text bindings remain active after Set Map and can update the corresponding
-map entries on later ticks. Get Selected Button returns an index excluding New
+A successful Set Map replaces the complete map and detaches the original widget text bindings; later ticks do not restore the old expression values. Failed Set Map validation leaves the existing map and bindings unchanged. Get Selected Button returns an index excluding New
 line entries, or 65535 when no button is selected.
 
 Get Button Text uses Object, Button ID and Store result into, following the

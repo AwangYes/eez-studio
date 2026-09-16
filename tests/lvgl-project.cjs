@@ -27,6 +27,11 @@ exports.run = async () => {
         placeholder: "hint", text: "hint", textType: "expression"
     });
     rawScreen.children.find(c => c.identifier === "keys").buttons[2].text = "key_label";
+    // Keep a second matrix to exercise bindings unaffected by Set Map.
+    const boundKeys = structuredClone(rawScreen.children.find(c => c.identifier === "keys"));
+    boundKeys.objID = randomUUID();
+    boundKeys.identifier = "bound_keys";
+    rawScreen.children.push(boundKeys);
     rawScreen.children.push(
         { ...LVGLTextareaWidget.classInfo.defaultValue, type: "LVGLTextareaWidget", identifier: "edit_key", text: "key_label", textType: "expression" },
         { ...LVGLLabelWidget.classInfo.defaultValue, type: "LVGLLabelWidget", identifier: "copied_label", text: "copied", textType: "expression" },
@@ -65,6 +70,10 @@ exports.run = async () => {
             const raw = structuredClone(base);
             raw.settings.general.lvglVersion = version;
             raw.settings.general.flowSupport = flow;
+            if (flow) {
+                const keys = raw.userPages[0].components.find(c => c.type === "LVGLScreenWidget").children.find(c => c.identifier === "keys");
+                Object.assign(keys.buttons[0], { text: "LVGL.LV_SYMBOL_BACKSPACE", textType: "expression" });
+            }
             if (!flow) {
                 raw.userPages[0].components = raw.userPages[0].components.filter(c => c.type === "LVGLScreenWidget");
                 raw.userPages[0].connectionLines = [];
@@ -112,6 +121,7 @@ exports.run = async () => {
                 const input = children.find(c => c.identifier === "input");
                 const dynamic = children.find(c => c.identifier === "dynamic_input");
                 const matrix = children.find(c => c.identifier === "keys");
+                const boundMatrix = children.find(c => c.identifier === "bound_keys");
                 const keyInput = children.find(c => c.identifier === "edit_key");
                 const copied = children.find(c => c.identifier === "copied_label");
                 const selected = children.find(c => c.identifier === "selected_label");
@@ -134,21 +144,25 @@ exports.run = async () => {
                 runtime.lgvlPageRuntime.lvglScreenTick();
                 assert.equal(wasm.UTF8ToString(wasm._lv_textarea_get_placeholder_text(dynamic._lvglObj)), "bound hint");
                 const getText = version.startsWith("9.") ? wasm._lv_buttonmatrix_get_button_text : wasm._lv_btnmatrix_get_btn_text;
-                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "A");
-                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 1)), "bound key");
+                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "");
+                assert.equal(wasm.UTF8ToString(getText(boundMatrix._lvglObj, 1)), "bound key");
                 edit(dynamic, "");
                 edit(keyInput, "");
                 runtime.lgvlPageRuntime.lvglScreenTick();
                 assert.equal(wasm.UTF8ToString(wasm._lv_textarea_get_placeholder_text(dynamic._lvglObj)), "");
-                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 1)), " ");
+                assert.equal(wasm.UTF8ToString(getText(boundMatrix._lvglObj, 1)), " ");
                 edit(dynamic, "new hint");
                 edit(keyInput, "\uf00c new");
                 runtime.lgvlPageRuntime.lvglScreenTick();
                 assert.equal(wasm.UTF8ToString(wasm._lv_textarea_get_placeholder_text(dynamic._lvglObj)), "new hint");
-                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 1)), "\uf00c new");
+                assert.equal(wasm.UTF8ToString(getText(boundMatrix._lvglObj, 1)), "\uf00c new");
                 edit(input, "changed");
                 runtime.lgvlPageRuntime.lvglScreenTick();
                 assert.equal(label(copied), "hello 世界");
+                // Repeated ticks and variable changes must never restore the old symbol/map.
+                for (let i = 0; i < 20; i++) runtime.lgvlPageRuntime.lvglScreenTick();
+                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "");
+                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 1)), "\uf00d bound key");
                 assert.equal(label(buttonText), "\uf00d bound key");
                 assert(!runtime.error, String(runtime.error));
                 console.log("PASS: Studio Run, nine compiled actions and live empty/non-empty bindings " + version);
