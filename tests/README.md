@@ -8,7 +8,7 @@ npm run test:lvgl-metadata
 xvfb-run -a npm run test:lvgl  # Linux, or npm run test:lvgl on a desktop
 ```
 
-- The metadata gate compares all 73 catalog IDs with the generated framework's
+- The metadata gate compares all 74 catalog IDs with the generated framework's
   dispatch table, instantiates all five shipped WASM engines, checks the new map
   exports, and excludes test-only exports from release modules.
 - The Electron test bootstraps the actual editor, loads/saves/reopens a project,
@@ -18,7 +18,7 @@ xvfb-run -a npm run test:lvgl  # Linux, or npm run test:lvgl on a desktop
   clipboard cloning, grouped multi-object changes and validation are exercised.
 - Actual editor preview calls run against LVGL 8.4.0 / 9.2.2 / 9.3.0 / 9.4.0 / 9.5.0.
 - Studio Run builds and executes a saved project for all five versions, with
-  Start → LVGL Actions, all eight new actions, actual Textarea VALUE_CHANGED
+  Start → LVGL Actions, all nine new actions, actual Textarea VALUE_CHANGED
   assignments, getter results, and live non-empty → empty → non-empty bindings.
 - Generated Flow and non-Flow C, headers and assets are emitted for every version.
   `tests/native` compiles them as C, links the bundled amalgamation where needed,
@@ -34,8 +34,8 @@ read-only repository permissions and never creates a release.
 
 ## Matching runtime sources
 
-- Framework implementation: [eez-framework PR #30](https://github.com/eez-open/eez-framework/pull/30), commit `f008987e22a844d8ed2eba741981f63f6776a275`.
-- Build tooling and reproducible engines: [studio-wasm-libs PR #1](https://github.com/eez-open/studio-wasm-libs/pull/1), commit `8e26785edd57d654267a95a6506069a5aa723a75`.
+- Framework implementation: [eez-framework PR #30](https://github.com/eez-open/eez-framework/pull/30), commit `0a1acdfe16799302a781add3a254ff06b6f78fec`.
+- Build tooling and reproducible engines: [studio-wasm-libs PR #1](https://github.com/eez-open/studio-wasm-libs/pull/1), commit `8f3534796407a235dd117b06e14f264d03b26ef3`.
 
 Update the framework pin and regenerate before merging if the framework change
 is squash-merged. Consume the resulting amalgamation and all five engines as one
@@ -44,9 +44,12 @@ actions require the matching dispatcher, not merely raw LVGL function exports.
 
 Set Map uses the widget's complete Buttons editor rather than a new map-resource
 or string-array UI. Its expressions are evaluated at action execution. Widget
-bindings keep their original map-entry indexes (including row markers): later
-ticks may overwrite matching entries; out-of-range or newline-targeting updates
-leave the map unchanged. Placeholder bindings follow the established same rule
+bindings remain live until Set Map succeeds. Successful Set Map detaches the original
+Buttons bindings, so default symbol expressions cannot overwrite replacement text.
+A failed Set Map preserves the current map and bindings. Recreating the widget
+restores its configured bindings. Tests cover symbol-to-literal replacement over
+repeated ticks, other matrices remaining live, and replacement allocation failure.
+Placeholder bindings follow the established same rule
 as Text bindings and do not detach when an action sets a value.
 
 The workflow exercises Electron on Linux, Windows and macOS. Linux packaging is

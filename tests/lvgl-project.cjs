@@ -144,7 +144,7 @@ exports.run = async () => {
                 runtime.lgvlPageRuntime.lvglScreenTick();
                 assert.equal(wasm.UTF8ToString(wasm._lv_textarea_get_placeholder_text(dynamic._lvglObj)), "bound hint");
                 const getText = version.startsWith("9.") ? wasm._lv_buttonmatrix_get_button_text : wasm._lv_btnmatrix_get_btn_text;
-                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "");
+                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "A");
                 assert.equal(wasm.UTF8ToString(getText(boundMatrix._lvglObj, 1)), "bound key");
                 edit(dynamic, "");
                 edit(keyInput, "");
@@ -161,7 +161,7 @@ exports.run = async () => {
                 assert.equal(label(copied), "hello 世界");
                 // Repeated ticks and variable changes must never restore the old symbol/map.
                 for (let i = 0; i < 20; i++) runtime.lgvlPageRuntime.lvglScreenTick();
-                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "");
+                assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 0)), "A");
                 assert.equal(wasm.UTF8ToString(getText(matrix._lvglObj, 1)), "\uf00d bound key");
                 assert.equal(label(buttonText), "\uf00d bound key");
                 assert(!runtime.error, String(runtime.error));

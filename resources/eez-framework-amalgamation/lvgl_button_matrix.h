@@ -33,6 +33,7 @@ typedef lv_btnmatrix_ctrl_t eez_bm_ctrl_t;
 
 typedef struct {
     const char **map;
+    bool bindingsDetached;
 } eez_bm_state_t;
 
 static void eez_bm_delete(lv_event_t *event) {
@@ -123,6 +124,7 @@ static bool eez_bm_replace(lv_obj_t *obj, const char *const *map,
             return false;
         }
         state->map = NULL;
+        state->bindingsDetached = false;
         if (!lv_obj_add_event_cb(obj, eez_bm_delete, LV_EVENT_DELETE, state)) {
             EEZ_BM_FREE(state);
             EEZ_BM_FREE((void *)copy);
@@ -134,6 +136,15 @@ static bool eez_bm_replace(lv_obj_t *obj, const char *const *map,
     EEZ_BM_SET_MAP(obj, copy);
     if (ctrl && count) EEZ_BM_SET_CTRL_MAP(obj, ctrl);
     EEZ_BM_FREE((void *)oldMap);
+    return true;
+}
+
+/* A successful action replaces the complete map, including its text bindings.
+ * Failed replacements leave the current map and its bindings intact. */
+static bool eez_bm_set_map(lv_obj_t *obj, const char *const *map,
+    uint32_t count, const eez_bm_ctrl_t *ctrl) {
+    if (!eez_bm_replace(obj, map, count, ctrl, -1, NULL)) return false;
+    eez_bm_state(obj)->bindingsDetached = true;
     return true;
 }
 
@@ -150,6 +161,13 @@ static bool eez_bm_set_text(lv_obj_t *obj, uint32_t mapIndex, const char *text) 
     if (!strcmp(text, "\n")) return false;
     if (!strcmp(map[mapIndex], text)) return true;
     return eez_bm_replace(obj, map, count, NULL, (int32_t)mapIndex, text);
+}
+
+static bool eez_bm_update_bound_text(lv_obj_t *obj, uint32_t mapIndex, const char *text) {
+    if (!obj || !lv_obj_check_type(obj, &EEZ_BM_CLASS) || !text) return false;
+    eez_bm_state_t *state = eez_bm_state(obj);
+    if (state && state->bindingsDetached) return true;
+    return eez_bm_set_text(obj, mapIndex, text);
 }
 
 #endif
