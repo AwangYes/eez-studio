@@ -35,7 +35,7 @@ read-only repository permissions and never creates a release.
 ## Matching runtime sources
 
 - Framework implementation: [eez-framework PR #30](https://github.com/eez-open/eez-framework/pull/30), commit `0a1acdfe16799302a781add3a254ff06b6f78fec`.
-- Build tooling and reproducible engines: [studio-wasm-libs PR #1](https://github.com/eez-open/studio-wasm-libs/pull/1), commit `8f3534796407a235dd117b06e14f264d03b26ef3`.
+- Build tooling and matching engines: [studio-wasm-libs PR #1](https://github.com/eez-open/studio-wasm-libs/pull/1), commit `ceed856175282dd67de2917a394a2f98ddb8af33`.
 
 Update the framework pin and regenerate before merging if the framework change
 is squash-merged. Consume the resulting amalgamation and all five engines as one
